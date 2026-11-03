@@ -4,17 +4,16 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="2026.11.03.007"
+VERSION="2026.11.03.008"
 OUT="arraybackup.plg"
 
-# Platzhalter setzen (GitHub-Account + Repo), damit Update-Pruefung/CA spaeter
-# funktionieren. Fuer reine Lokalinstallation nur eine Warnung.
-OWNER="${OWNER:-OWNER}"
-REPO="${REPO:-unraid-array-backup}"
-if [ "$OWNER" = "OWNER" ]; then
-  echo "WARNING: OWNER ist noch ein Platzhalter - Installation klappt lokal," >&2
-  echo "         aber Auto-Update/CA funktioniert erst mit echtem GitHub-Owner." >&2
-fi
+# GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
+# zeigen (Repo-Unterpfad beachten!). ACHTUNG: Das GitHub-Repo muss OFFENTLICH
+# sein - private Repos liefern auf raw.githubusercontent.com 404, dann kann
+# der Plugin-Manager nicht nach Updates suchen (Update klappt nur manuell).
+OWNER="${OWNER:-godghost123}"
+REPO="${REPO:-back}"
+PLG_PATH="${PLG_PATH:-unraid-array-backup/arraybackup.plg}"
 
 # base64 als Einzeiler, ohne CR (CRLF aus Windows-Checkout -> kaputtes Base64)
 b64() { tr -d '\r' < "$1" | base64 | tr -d '\n'; }
@@ -33,8 +32,8 @@ cat <<EOF
   name="arraybackup"
   author="unraid-array-backup"
   version="${VERSION}"
-  url="https://raw.githubusercontent.com/${OWNER}/${REPO}/main/${OUT}"
-  pluginURL="https://raw.githubusercontent.com/${OWNER}/${REPO}/main/${OUT}"
+  url="https://raw.githubusercontent.com/${OWNER}/${REPO}/main/${PLG_PATH}"
+  pluginURL="https://raw.githubusercontent.com/${OWNER}/${REPO}/main/${PLG_PATH}"
   support="https://github.com/${OWNER}/${REPO}/issues"
   project="https://github.com/${OWNER}/${REPO}"
   launch="Settings/ArrayBackup"
@@ -44,7 +43,9 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
-- Initiale Version: paralleles Backup aller Array-Datendisks, Snapshots per
+- Update-Mechanismus behoben: pluginURL zeigt jetzt auf die echte PLG-Adresse
+  im GitHub-Repo (vorher Platzhalter-URL -> Update-Check lief ins Leere).
+- Vorherige Versionen: paralleles Backup aller Array-Datendisks, Snapshots per
   rsync --link-dest, Retention, Cron-Scheduler, WebUI unter Settings -> ArrayBackup.
 </CHANGES>
 
