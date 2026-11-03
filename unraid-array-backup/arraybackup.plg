@@ -3,7 +3,7 @@
 <PLUGIN
   name="arraybackup"
   author="unraid-array-backup"
-  version="2026.11.03.001"
+  version="2026.11.03.002"
   url="https://raw.githubusercontent.com/OWNER/unraid-array-backup/main/arraybackup.plg"
   pluginURL="https://raw.githubusercontent.com/OWNER/unraid-array-backup/main/arraybackup.plg"
   support="https://github.com/OWNER/unraid-array-backup/issues"
@@ -14,7 +14,7 @@
 
 <CHANGES>
 ##arraybackup
-###2026.11.03.001
+###2026.11.03.002
 - Initiale Version: paralleles Backup aller Array-Datendisks, Snapshots per
   rsync --link-dest, Retention, Cron-Scheduler, WebUI unter Settings -> ArrayBackup.
 </CHANGES>
