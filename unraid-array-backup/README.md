@@ -42,9 +42,19 @@ Lokale Installation (ohne GitHub-Repo):
 4. Tab **Konfiguration**: Ziel-Mountpoint eintragen (z. B. `/mnt/backup`), speichern.
 5. Erstmalig **Dry-Run** aktivieren und „Backup starten" klicken, dann Dry-Run aus und echten Lauf starten.
 
-Hinweis: Solange `OWNER`/`REPO` in `build.sh` Platzhalter sind, zeigt die
-Plugin-Liste nur eine Warnung beim Update-Check – die lokale Installation
-funktioniert dadurch dennoch.
+### Auto-Update über GitHub
+
+`build.sh` setzt `pluginURL` auf
+`https://raw.githubusercontent.com/godghost123/back/main/unraid-array-backup/arraybackup.plg`.
+Damit „Check for Updates" in WebUI → Plugins funktioniert, muss das GitHub-Repo
+**öffentlich** sein (private Repos liefern auf raw.githubusercontent.com einen
+404, dann findet der Update-Check nichts und es „passiert einfach nichts").
+
+Nach dem Umschalten auf öffentlich (oder nach einem Update der URL in
+`build.sh`): Plugin einmal komplett **entfernen und neu installieren**, damit
+die auf dem Flash gespeicherte Kopie (`/boot/config/plugins/arraybackup.plg`)
+die neue `pluginURL` erhält. Ab dann genügt in Plugins → ArrayBackup →
+„Check for Updates" bzw. der Update-Button.
 
 ### Update / erneut installieren
 
