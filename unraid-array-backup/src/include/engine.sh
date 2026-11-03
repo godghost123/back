@@ -27,6 +27,7 @@ CFG_MINFREE=500
 CFG_MAXJOBS=0
 CFG_BWLIMIT=0
 CFG_DRYRUN=0
+CFG_RESUME=1
 CFG_EXCLUDES=""
 
 log() { echo "[$(date '+%F %T')] $*"; }
@@ -52,7 +53,7 @@ load_config() {
   eval "$(php -r '
     $c = json_decode(file_get_contents($argv[1]), true) ?: [];
     $d = array("target"=>"/mnt/backup","retention_runs"=>14,"retention_min_free_gb"=>500,
-               "max_jobs"=>0,"bwlimit_kbps"=>0,"dry_run"=>false,"exclude_file"=>"");
+               "max_jobs"=>0,"bwlimit_kbps"=>0,"dry_run"=>false,"resume_aborted"=>true,"exclude_file"=>"");
     $c += $d;
     printf("CFG_TARGET=%s\n",   escapeshellarg($c["target"]));
     printf("CFG_RETENTION=%d\n", max(1, (int)$c["retention_runs"]));
@@ -60,6 +61,7 @@ load_config() {
     printf("CFG_MAXJOBS=%d\n",   max(0, (int)$c["max_jobs"]));
     printf("CFG_BWLIMIT=%d\n",   max(0, (int)$c["bwlimit_kbps"]));
     printf("CFG_DRYRUN=%d\n",    !empty($c["dry_run"]) ? 1 : 0);
+    printf("CFG_RESUME=%d\n",    !empty($c["resume_aborted"]) ? 1 : 0);
     printf("CFG_EXCLUDES=%s\n",  escapeshellarg($c["exclude_file"]));
   ' "$CONF_FILE")"
 }
@@ -203,12 +205,44 @@ prune() {
   fi
 }
 
+# Lauf-Verzeichnis finden, das unvollstaendig beendet wurde (State aborted/partial/
+# failed in .runmeta.json) oder dessen Meta fehlt (Kill/Crash/Reboot mitten im Lauf).
+# So einen Lauf koennen wir wiederverwenden: rsync in dasselbe Ziel-Verzeichnis
+# ueberspringt bereits kopierte Dateien -> Fortsetzen in Etappen.
+find_resumable_run() {
+  local runs_dir="$CFG_TARGET/runs" r meta st
+  [ -d "$runs_dir" ] || return 1
+  for r in $(ls -1 "$runs_dir" 2>/dev/null | grep -E '^r-' | sort -r); do
+    meta="$runs_dir/$r/.runmeta.json"
+    if [ ! -f "$meta" ]; then echo "$r"; return 0; fi
+    st=$(grep -oE '"state":"[a-z]+"' "$meta" | head -n1 | cut -d'"' -f4)
+    case "$st" in
+      aborted|partial|failed) echo "$r"; return 0 ;;
+    esac
+  done
+  return 1
+}
+
 run_backup() {
   RUN_ID="r-$(date +%Y%m%d-%H%M%S)"
   local runs_dir="$CFG_TARGET/runs"
   local run_root="$runs_dir/$RUN_ID"
   local latest_abs="" started d name dest args ex ec state total_logical=0 total_delta=0 dmeta="" dur
+  local prev_started="" rid
   local start_epoch=$(date +%s)
+
+  # Etappen-Fortsetzung: den neuesten abgebrochenen Lauf wiederverwenden statt
+  # neu beginnen. rsync prueft dann gegen den bereits gefuellten Stand und
+  # uebertraegt nur die fehlenden Dateien. (Dry-Runs betreffen kein Ziel.)
+  if [ "$CFG_DRYRUN" -eq 0 ] && [ "$CFG_RESUME" -eq 1 ]; then
+    if rid=$(find_resumable_run); then
+      RUN_ID="$rid"
+      run_root="$runs_dir/$RUN_ID"
+      prev_started=$(grep -oE '"started":"[^"]+"' "$run_root/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
+      log "resuming interrupted run $RUN_ID - already copied files are skipped"
+      syslog_err "resuming interrupted run $RUN_ID (Etappen-Fortsetzung aktiv)"
+    fi
+  fi
 
   mkdir -p "$runs_dir"
   [ "$CFG_DRYRUN" -eq 0 ] && mkdir -p "$run_root"
@@ -218,6 +252,7 @@ run_backup() {
   fi
 
   started=$(date '+%F %T')
+  [ -n "$prev_started" ] && started="$prev_started"
   write_status "running" "$RUN_ID"
   log "run $RUN_ID started (disks: ${#DISKS[@]}, dry_run=$CFG_DRYRUN, link-dest=${latest_abs:-none})"
 
@@ -225,7 +260,9 @@ run_backup() {
   for d in "${DISKS[@]}"; do
     name=$(basename "$d")
     dest="$run_root/$name"
-    args=(-aHAX --numeric-ids --delete --stats --info=progress2)
+    # --partial: bereits teilweise uebertragene Dateien nicht verwerfen, damit ein
+    # spaeterer (fortgesetzter) Lauf daran anknuepfen kann statt neu zu kopieren.
+    args=(-aHAX --numeric-ids --delete --stats --info=progress2 --partial)
     if [ -n "$latest_abs" ] && [ -d "$latest_abs/$name" ]; then
       args+=(--link-dest="$latest_abs/$name")
     fi

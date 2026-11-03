@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="2026.11.03.008"
+VERSION="2026.11.03.009"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -43,10 +43,11 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
-- Update-Mechanismus behoben: pluginURL zeigt jetzt auf die echte PLG-Adresse
-  im GitHub-Repo (vorher Platzhalter-URL -> Update-Check lief ins Leere).
-- Vorherige Versionen: paralleles Backup aller Array-Datendisks, Snapshots per
-  rsync --link-dest, Retention, Cron-Scheduler, WebUI unter Settings -> ArrayBackup.
+- Etappen-Betrieb: abgebrochene/gestoppte Laeufe werden beim naechsten Start
+  fortgesetzt (rsync --partial, Fortschritts-Schalter "Abbruch fortsetzen").
+  Damit kann auch das erste (Voll-)Backup in mehreren Etappen laufen.
+- Vorherige: pluginURL-Korrektur (Update-Fix), Fortschritts-Anzeige robust
+  gegen neue rsync-Formate, ausfuehrliche Fehlerausgabe (syslog + WebUI).
 </CHANGES>
 
 EOF

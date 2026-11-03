@@ -111,6 +111,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         <label>Max. gleichzeitige Disks (0=alle)</label><input type="number" id="cfg-maxjobs" min="0">
         <label>Bandbreite KB/s (0=unbegrenzt)</label><input type="number" id="cfg-bwlimit" min="0">
         <label>Dry-Run (nur Testlauf)</label><input type="checkbox" id="cfg-dryrun">
+        <label>Abbruch fortsetzen (Etappen)</label><input type="checkbox" id="cfg-resume">
         <label>Auschluss-Liste (rsync-Muster)</label><textarea id="cfg-excludes" placeholder="*.tmp&#10;System Volume Information/"></textarea>
         <label>Zeitplan aktiviert</label><input type="checkbox" id="cfg-sched-en">
         <label>Cron-Ausdruck</label><input type="text" id="cfg-sched-cron" placeholder="0 2 * * 7">
@@ -372,6 +373,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       $('cfg-maxjobs').value = c.max_jobs;
       $('cfg-bwlimit').value = c.bwlimit_kbps;
       $('cfg-dryrun').checked = !!c.dry_run;
+      $('cfg-resume').checked = c.resume_aborted !== false;
       $('cfg-excludes').value = c.excludes || '';
       $('cfg-sched-en').checked = !!c.schedule_enabled;
       $('cfg-sched-cron').value = c.schedule_cron;
@@ -385,6 +387,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       max_jobs: $('cfg-maxjobs').value,
       bwlimit_kbps: $('cfg-bwlimit').value,
       dry_run: $('cfg-dryrun').checked ? 1 : 0,
+      resume_aborted: $('cfg-resume').checked ? 1 : 0,
       excludes: $('cfg-excludes').value,
       schedule_enabled: $('cfg-sched-en').checked ? 1 : 0,
       schedule_cron: $('cfg-sched-cron').value

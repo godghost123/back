@@ -11,6 +11,7 @@ Paritäts-Platten werden automatisch übersprungen (unter `/mnt` nicht gemountet
 - **Disk-Historie:** pro Disk eine chronologische Kette (`perdisk/diskN/<timestamp>` als Symlinks)
 - **Space-effizient:** unveränderte Dateien sind harte Links auf den vorherigen Lauf
 - **Retention:** behält die letzten N Läufe, Mindest-Freiraum-Guard, einzelne Läufe anheften (Pinning)
+- **Etappen-Betrieb:** ein gestoppter oder abgestürzter Lauf wird beim nächsten Start fortgesetzt (`rsync --partial`, Schalter „Abbruch fortsetzen") – so kann auch das erste Vollbackup in mehreren Etappen laufen
 - **WebUI** im Settings-Menü: Live-Fortschritt pro Disk, Snapshot-Tabelle, Array-Browser, Disk-Historie, Konfiguration
 - **Scheduler:** Cron-Eintrag auf Flash (`/boot/config/plugins/arraybackup/arraybackup.cron`), bei jedem Boot via `update_cron` re-aktiviert
 - **Sicherheit:** Lockfile gegen Doppelstarts, Selbst-Backup-Schutz, Freiraum-Check, Dry-Run-Modus, Traversal-Schutz im Browser

@@ -31,6 +31,7 @@ function load_config() {
         'max_jobs' => 0,
         'bwlimit_kbps' => 0,
         'dry_run' => false,
+        'resume_aborted' => true,
         'exclude_file' => "$CONF_DIR/excludes.txt",
         'schedule_enabled' => false,
         'schedule_cron' => '0 2 * * 7',
@@ -96,6 +97,7 @@ case 'config-save':
         if (isset($_POST[$k])) $c[$k] = max(0, (int)$_POST[$k]);
     }
     $c['dry_run'] = !empty($_POST['dry_run']);
+    $c['resume_aborted'] = !empty($_POST['resume_aborted']);
     $c['schedule_enabled'] = !empty($_POST['schedule_enabled']);
     if (!empty($_POST['excludes'])) {
         @file_put_contents($c['exclude_file'], str_replace("\r\n", "\n", $_POST['excludes']));
