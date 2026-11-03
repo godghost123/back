@@ -1,2 +1,0 @@
-#!/bin/bash
-echo "$(date '+%Y-%m-%d %H:%M:%S') - EVENT: svcs_restarted (arg: $1)" >> /var/log/doctest-events.log
