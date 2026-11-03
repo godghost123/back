@@ -74,6 +74,14 @@ function safe_target_path($c, $rel) {
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 $c = load_config();
 
+/* CSRF: emhttp (WebUI-Daemon) prueft den csrf_token ALLEIN und verwirft
+ * POSTs ohne gueltigen Token ("missing csrf_token" im syslog), BEVOR diese
+ * Datei ueberhaupt ausgefuehrt wird. Erreicht ajax.php ein POST, ist der
+ * Token also bereits gueltig. Eigene Nachpruefung gegen var.ini auf Disk
+ * waere fehleranfaellig: var.ini hinkt dem Session-Token hinterher
+ * (Token rotiert, Datei wird spaeter beschrieben) -> falsche
+ * "abgelaufen"-Meldungen. Deshalb hier bewusst KEINE eigene Pruefung. */
+
 switch ($action) {
 
 case 'config-get':

@@ -31,9 +31,19 @@ CFG_EXCLUDES=""
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
+# Fehler zusaetzlich ins syslog (journalctl -t arraybackup / Syslog-Server),
+# damit die WebUI und root die Ursache sehen, nicht nur engine.log auf Flash.
+syslog_err() {
+  # busybox-kompatibel halten: kein '--', kein -p mit Punkt-Namen erzwingen
+  command -v logger >/dev/null 2>&1 || return 0
+  logger -t arraybackup "$*" 2>/dev/null || logger "$*" 2>/dev/null
+  return 0
+}
+
 die() {
   log "ERROR: $*"
-  write_status "failed" "${RUN_ID}"
+  syslog_err "FATAL: $*"
+  write_status "failed" "${RUN_ID}" "$*"
   exit 1
 }
 
@@ -55,25 +65,33 @@ load_config() {
 }
 
 write_status() {
-  local state="$1" run_id="$2"
-  local now d djson=""
+  local state="$1" run_id="$2" errmsg="${3:-}"
+  local now d djson="" ejson=""
   now=$(date '+%F %T')
+  # JSON-Escaping fuer die Fehlermeldung (WebUI zeigt sie im Banner)
+  if [ -n "$errmsg" ]; then
+    errmsg=$(printf '%s' "$errmsg" | tr '\n\r' '  ' | tr -d '"\\' | cut -c1-500)
+    ejson="\"error\":\"${errmsg}\","
+  fi
   for d in "${DISKS[@]}"; do
     local name pct="" rate="" eta="" ex="" last
     name=$(basename "$d")
     if [ -f "$PROG_DIR/$name.log" ]; then
-      # --info=progress2 schreibt Zeilen der Form:  12.34%  123.45MB/s  0:10:23 (xfr#..)
-      last=$(tr '\r' '\n' < "$PROG_DIR/$name.log" 2>/dev/null | grep -E '[0-9]+(\.[0-9]+)?%[[:space:]]' | tail -n1 | tr -s ' ')
-      pct=$(echo "$last" | awk '{gsub(/%/,"",$1); print $1}')
-      rate=$(echo "$last" | awk '{print $2}')
-      eta=$(echo "$last" | awk '{print $3}')
+      # --info=progress2: altes rsync "12.34%  123.45MB/s  0:10:23 (xfr#..)",
+      # neueres rsync 3.2.3+ "185.869.340.868  81%  1:00:38  77.80MB/s (xfr#..)"
+      # (mit locale-Gruppierungspunkten). Feldpositionen sind also NICHT
+      # verlaesslich - wir suchen die Werte selbst (Prozent-/Rate-/Zeit-Token).
+      last=$(tr '\r' '\n' < "$PROG_DIR/$name.log" 2>/dev/null | grep -E '[0-9]+%([[:space:]]|$)' | tail -n1)
+      pct=$(printf '%s' "$last"  | grep -oE '[0-9]*\.?[0-9]+%' | head -n1 | tr -d '%')
+      rate=$(printf '%s' "$last" | grep -oE '[0-9]+([.,][0-9]+)?[[:space:]]*(kB|MB|GB|TB|B)/s' | head -n1)
+      eta=$(printf '%s' "$last"  | grep -oE '[0-9]+:[0-9]{2}(:[0-9]{2})?' | head -n1)
     fi
     [ -f "$STATS_DIR/$name.exit" ] && ex=$(cat "$STATS_DIR/$name.exit")
     djson="${djson}\"${name}\":{\"pct\":\"${pct}\",\"rate\":\"${rate}\",\"eta\":\"${eta}\",\"exit\":\"${ex}\"},"
   done
   djson=${djson%,}
-  printf '{"state":"%s","run_id":"%s","updated":"%s","dry_run":%s,"disks":{%s}}\n' \
-    "$state" "$run_id" "$now" "${CFG_DRYRUN}" "$djson" > "$STATUS_FILE.tmp" && mv "$STATUS_FILE.tmp" "$STATUS_FILE"
+  printf '{"state":"%s","run_id":"%s","updated":"%s","dry_run":%s,%s"disks":{%s}}\n' \
+    "$state" "$run_id" "$now" "${CFG_DRYRUN}" "$ejson" "$djson" > "$STATUS_FILE.tmp" && mv "$STATUS_FILE.tmp" "$STATUS_FILE"
 }
 
 running_count() {
@@ -95,14 +113,22 @@ stop_all() {
 
 validate() {
   local d rt avail_kb need_kb t
+  command -v rsync >/dev/null 2>&1 || die "rsync not found on this system - plugin requires rsync"
+  command -v php   >/dev/null 2>&1 || die "php not found on this system - cannot parse config"
+
   DISKS=()
   for d in /mnt/disk[0-9]*; do
     [ -d "$d" ] && DISKS+=("$d")
   done
   [ ${#DISKS[@]} -gt 0 ] || die "no data disks found under /mnt - is the array started?"
 
-  [ -d "$CFG_TARGET" ] || die "backup target not mounted: $CFG_TARGET"
+  [ -e "$CFG_TARGET" ] || die "backup target does not exist: $CFG_TARGET (check the path in the plugin settings; mount it first, e.g. via the 'Tools' plugin or an NFS/UDM mount)"
+  [ -d "$CFG_TARGET" ] || die "backup target path is not a directory: $CFG_TARGET"
   findmnt -T "$CFG_TARGET" >/dev/null 2>&1 || die "target is not a mount point: $CFG_TARGET"
+  if ! findmnt -T "$CFG_TARGET" -o TARGET,FSTYPE,SOURCE 2>/dev/null | grep -qiE 'btrfs|ext[234]|xfs|zfs|ntfs|vfat'; then
+    log "note: target filesystem type: $(findmnt -T "$CFG_TARGET" -no FSTYPE 2>/dev/null || echo unknown)"
+  fi
+  [ -w "$CFG_TARGET" ] || die "backup target is not writable (permissions/share read-only?): $CFG_TARGET"
 
   rt=$(realpath "$CFG_TARGET")
   case "$rt" in
@@ -225,18 +251,27 @@ run_backup() {
   wait
 
   state="success"
+  local fail_detail=""
   for d in "${DISKS[@]}"; do
     name=$(basename "$d")
     ec=$(cat "$STATS_DIR/$name.exit" 2>/dev/null || echo 1)
     if [ "$ec" != "0" ] && [ "$ec" != "24" ]; then
       state="partial"
+      # rsync-Fehlerursache ins syslog ziehen (letzte Fehlerzeilen aus dem Job-Log)
+      local errline
+      errline=$(tr '\r' '\n' < "$PROG_DIR/$name.log" 2>/dev/null | grep -iE 'rsync error|ERROR|error:' | tail -n3 | tr '\n' ' ')
+      [ -n "$errline" ] || errline=$(tr '\r' '\n' < "$PROG_DIR/$name.log" 2>/dev/null | tail -n2 | tr '\n' ' ')
+      log "ERROR disk $name: rsync exit=$ec - $errline"
+      syslog_err "run $RUN_ID: $name failed (rsync exit=$ec): ${errline:-keine Logausgabe}"
+      fail_detail="$fail_detail $name(exit=$ec): ${errline:-rsync exit $ec};"
     fi
   done
   [ -f "$STOP_FILE" ] && state="aborted"
 
   if [ "$CFG_DRYRUN" -eq 1 ]; then
-    write_status "$state" "$RUN_ID"
+    write_status "$state" "$RUN_ID" "$fail_detail"
     log "dry run $RUN_ID finished with state=$state (nothing written)"
+    [ "$state" != "success" ] && syslog_err "dry run $RUN_ID finished with state=$state"
     return 0
   fi
 
@@ -270,7 +305,10 @@ run_backup() {
 
   dur=$(( $(date +%s) - start_epoch ))
   echo "$RUN_ID $state logical=$total_logical delta=$total_delta duration=${dur}s" >> "$LOG_DIR/history.log"
-  write_status "$state" "$RUN_ID"
+  write_status "$state" "$RUN_ID" "$fail_detail"
+  if [ "$state" != "success" ]; then
+    syslog_err "run $RUN_ID finished with state=$state (see $LOG_DIR/engine.log)"$fail_detail
+  fi
   log "run $RUN_ID finished: state=$state logical=$total_logical delta=$total_delta duration=${dur}s"
 }
 
@@ -280,6 +318,7 @@ main() {
   exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
     log "another backup is already running - aborting"
+    syslog_err "start refused: another backup is already running"
     exit 1
   fi
   echo $$ > "$PID_FILE"

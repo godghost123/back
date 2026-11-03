@@ -2,6 +2,12 @@
 /* arraybackup - SettingsArrayBackup.php
  * Name des Dateigrundstuecks bestimmt den Menueeintrag: Settings*.php erscheint
  * automatisch im Settings-Menue der unRAID WebUI. */
+// CSRF-Token der Session holen (emhttp lehnt POSTs ohne gueltigen csrf_token ab
+// und schreibt sonst "missing csrf_token" ins syslog). $var wird von emhttp vor
+// dem Rendern gesetzt; parse_ini_file() auf var.ini funktioniert nicht
+// (Sonderzeichen) und wird nicht versucht.
+global $var;
+$__ab_csrf = $var['csrf_token'] ?? '';
 ?>
 <style>
 .ab-wrap { padding: 10px; }
@@ -119,13 +125,18 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 <script>
 (function () {
   var API = '/plugins/arraybackup/include/ajax.php';
+  var CSRF = '<?=htmlspecialchars($__ab_csrf, ENT_QUOTES)?>';
   var pollTimer = null, lastRunning = false;
   var runsCache = [];
 
   function $(id) { return document.getElementById(id); }
   function api(action, params, method) {
     method = method || 'POST';
-    var body = new URLSearchParams(Object.assign({action: action}, params || {}));
+    // csrf_token muss in jedem POST stecken, sonst meldet emhttp
+    // "missing csrf_token" im syslog. Der beim Seiten-Render gesetzte Token
+    // ist massgeblich - ajax.php prueft deshalb selbst nicht (var.ini auf
+    // Disk kann davon abweichen und liefert falsche "abgelaufen"-Meldungen).
+    var body = new URLSearchParams(Object.assign({action: action, csrf_token: CSRF}, params || {}));
     var opt = {method: method, headers: {'Content-Type': 'application/x-www-form-urlencoded'}};
     if (method === 'GET') { body.append('_', Date.now()); }
     var url = API + (method === 'GET' ? '?' + body.toString() : '');
@@ -185,6 +196,11 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       } else {
         live.style.display = 'none';
         $('ab-global').textContent = s.state ? 'Letzter Lauf ' + (s.run_id || '') + ': ' + s.state : '';
+        // Fehlergrund aus status.json (engine.sh schreibt dorthin die Ursache)
+        if (s.error && (s.state === 'failed' || s.state === 'partial')) {
+          banner('Fehler ' + (s.run_id || '') + ' (' + s.state + '): ' + s.error +
+                 ' — Details: /boot/config/plugins/arraybackup/logs/engine.log, syslog (filter: arraybackup)', 'err');
+        }
       }
       if (lastRunning && !running) { loadRuns(); } // Lauf beendet -> Tabellen neu laden
       lastRunning = running;

@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="2026.11.03.002"
+VERSION="2026.11.03.007"
 OUT="arraybackup.plg"
 
 # Platzhalter setzen (GitHub-Account + Repo), damit Update-Pruefung/CA spaeter
