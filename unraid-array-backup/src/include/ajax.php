@@ -54,9 +54,12 @@ function write_cron($c) {
 
 function engine_running() {
     global $RUN_DIR;
-    $pid = @file_get_contents("$RUN_DIR/engine.pid");
-    if ($pid && file_exists("/proc/".trim($pid))) return true;
-    return false;
+    $pid = (int)trim((string)@file_get_contents("$RUN_DIR/engine.pid"));
+    if ($pid <= 0 || !is_dir("/proc/$pid")) return false;
+    // pid files go stale and pids get reused - only report "running" while the
+    // process is actually our engine (cmdline contains engine.sh)
+    $cmd = @file_get_contents("/proc/$pid/cmdline");
+    return $cmd !== false && strpos($cmd, 'engine.sh') !== false;
 }
 
 function safe_target_path($c, $rel) {
@@ -92,6 +95,16 @@ case 'config-get':
 case 'config-save':
     foreach (['target','exclude_file','schedule_cron'] as $k) {
         if (isset($_POST[$k])) $c[$k] = trim($_POST[$k]);
+    }
+    // Reject an impossible target at SAVE time instead of failing at the next
+    // scheduled run at 02:00 - mirrors the engine's own validate() guard.
+    if (isset($_POST['target'])) {
+        $t = $c['target'];
+        if ($t === '' || $t[0] !== '/') jerr('target must be an absolute mountpoint path (e.g. /mnt/backup)');
+        $real = realpath($t);
+        if ($real !== false && preg_match('#^/mnt/(disk[0-9]+|user|share)(/|$)#', $real)) {
+            jerr('refusing to back up onto the array itself: '.$real);
+        }
     }
     foreach (['retention_runs','retention_min_free_gb','max_jobs','bwlimit_kbps'] as $k) {
         if (isset($_POST[$k])) $c[$k] = max(0, (int)$_POST[$k]);
@@ -148,12 +161,19 @@ case 'runs':
     jout(['ok' => true, 'runs' => $runs, 'target' => $c['target']]);
 
 case 'ls':
+    // Unbounded listings froze the browser/emhttp on disks with 100k+ files.
+    // Pagination: sort names only, stat just the requested slice.
     $rel = $_GET['path'] ?? $_POST['path'] ?? '';
     $full = safe_target_path($c, $rel);
     if ($full === false || !is_dir($full)) jerr('invalid path');
+    $offset = max(0, (int)($_GET['offset'] ?? $_POST['offset'] ?? 0));
+    $limit  = (int)($_GET['limit'] ?? $_POST['limit'] ?? 500);
+    if ($limit < 1 || $limit > 2000) $limit = 500;
+    $names = array_values(array_filter(scandir($full) ?: [], fn($e) => $e !== '.' && $e !== '..'));
+    sort($names, SORT_NATURAL);
+    $total = count($names);
     $entries = [];
-    foreach (scandir($full) ?: [] as $e) {
-        if ($e === '.' || $e === '..') continue;
+    foreach (array_slice($names, $offset, $limit) as $e) {
         $p = "$full/$e";
         $isDir = is_dir($p);
         $entries[] = [
@@ -164,17 +184,24 @@ case 'ls':
         ];
     }
     usort($entries, fn($a, $b) => [$b['dir'], $a['name']] <=> [$a['dir'], $b['name']]);
-    jout(['ok' => true, 'path' => $rel, 'entries' => $entries]);
+    jout(['ok' => true, 'path' => $rel, 'offset' => $offset,
+          'count' => count($entries), 'total' => $total,
+          'truncated' => $offset + count($entries) < $total,
+          'entries' => $entries]);
 
 case 'pin':
-    $id = preg_replace('/[^a-z0-9\-]/i', '', $_POST['run'] ?? '');
+    // Strict id shape (engine generates r-YYYYMMDD-HHMMSS): a typo like
+    // 'latest', 'runs' or 'perdisk' must never reach rm -rf / unlink paths.
+    $id = (string)($_POST['run'] ?? '');
+    if (!preg_match('/^r-\d{8}-\d{6}$/', $id)) jerr('invalid run id');
     $d = rtrim($c['target'], '/').'/runs/'.$id;
     if (!is_dir($d)) jerr('run not found');
     is_file("$d/.pinned") ? @unlink("$d/.pinned") : @touch("$d/.pinned");
     jout(['ok' => true, 'pinned' => is_file("$d/.pinned")]);
 
 case 'delete-run':
-    $id = preg_replace('/[^a-z0-9\-]/i', '', $_POST['run'] ?? '');
+    $id = (string)($_POST['run'] ?? '');
+    if (!preg_match('/^r-\d{8}-\d{6}$/', $id)) jerr('invalid run id');
     $target = rtrim($c['target'], '/');
     $d = "$target/runs/$id";
     if (!is_dir($d)) jerr('run not found');

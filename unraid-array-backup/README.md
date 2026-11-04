@@ -1,125 +1,180 @@
-# ArrayBackup – unRAID Plugin
+# ArrayBackup – unRAID plugin
 
-Sichert alle Datendisks des unRAID-Arrays **gleichzeitig parallel** (je Disk ein `rsync`-Job) und schreibt **gebündelt auf ein schnelles, lokal angeschlossenes Ziel** (z. B. RAID0 aus NVMe/SSDs). Jeder Lauf erzeugt einen **vollständigen Snapshot des gesamten Arrays** – space-effizient über harte Links (`rsync --link-dest`, Time-Machine-Prinzip).
+Backs up **all data disks of the unRAID array in parallel** (one `rsync` job
+per disk) and writes the streams **aggregated onto a fast, locally attached
+target** (e.g. a RAID0 of NVMe/SSDs). Every completed run is a **complete
+snapshot of the whole array** – space-efficient via hard links
+(`rsync --link-dest`, same idea as Time Machine).
 
-Paritäts-Platten werden automatisch übersprungen (unter `/mnt` nicht gemountet und aus den Datendisks rekonstruierbar).
+Parity disks are skipped automatically (they are not mounted under `/mnt` and
+can be rebuilt from the data disks).
 
 ## Features
 
-- **Paralleles Lesen, gebündeltes Schreiben:** alle Datendisks werden gleichzeitig eingelesen, die Schreibströme sättigen das RAID0-Ziel
-- **Array-Snapshots:** jeder Lauf sieht aus wie eine Komplett-Sicherung des Arrays (`runs/<timestamp>/disk1 … diskN`)
-- **Disk-Historie:** pro Disk eine chronologische Kette (`perdisk/diskN/<timestamp>` als Symlinks)
-- **Space-effizient:** unveränderte Dateien sind harte Links auf den vorherigen Lauf
-- **Retention:** behält die letzten N Läufe, Mindest-Freiraum-Guard, einzelne Läufe anheften (Pinning)
-- **Etappen-Betrieb:** ein gestoppter oder abgestürzter Lauf wird beim nächsten Start fortgesetzt (`rsync --partial`, Schalter „Abbruch fortsetzen") – so kann auch das erste Vollbackup in mehreren Etappen laufen
-- **WebUI** im Settings-Menü: Live-Fortschritt pro Disk, Snapshot-Tabelle, Array-Browser, Disk-Historie, Konfiguration
-- **Scheduler:** Cron-Eintrag auf Flash (`/boot/config/plugins/arraybackup/arraybackup.cron`), bei jedem Boot via `update_cron` re-aktiviert
-- **Sicherheit:** Lockfile gegen Doppelstarts, Selbst-Backup-Schutz, Freiraum-Check, Dry-Run-Modus, Traversal-Schutz im Browser
+- **Parallel reads, aggregated writes:** all data disks are read at the same
+  time; the write streams saturate the RAID0 target
+- **Array snapshots:** each run looks like a full copy of the array
+  (`runs/<timestamp>/disk1 … diskN`)
+- **Disk history:** per-disk chronological chain
+  (`perdisk/diskN/<timestamp>` as symlinks)
+- **Space-efficient:** unchanged files are hard links into the previous run
+- **Atomic promotion:** unfinished runs live in a hidden `.ab-staging/` area on
+  the target; only a completed run is renamed (same filesystem, atomic) into
+  `runs/` and the `latest` symlink is flipped. An aborted run never appears as
+  an apparently complete snapshot, and `--delete` never runs against a visible
+  snapshot of a previous generation
+- **Staged (Etappen) operation:** a stopped or crashed run resumes on the next
+  start; `rsync --partial-dir=.rsync-partial` makes already-copied files
+  reusable while keeping truncated files out of the snapshot. The first run
+  therefore becomes a full backup even across many sessions
+- **Retries:** transient rsync failures (exit 10/11/12/30) are retried up to 3
+  times with backoff; fatal errors (1/2/3/4) stop immediately. The failure
+  reason is surfaced in the WebUI (status JSON is built with `json_encode` and
+  validated before writing)
+- **Retention:** keeps the last N runs, enforces a minimum free space guard,
+  individual runs can be pinned
+- **WebUI** under Settings: live progress per disk, snapshot table, paged array
+  browser (500 entries + "load more"), disk history, configuration. All labels
+  come from a single string table (`de`/`en`) in `ArrayBackup.page`
+- **Scheduler:** cron entry on flash
+  (`/boot/config/plugins/arraybackup/arraybackup.cron`), re-activated via
+  `update_cron` on every boot
+- **Safety:** lock file against double starts, self-backup protection (target
+  on the array is refused), filesystem check (hard links required), free space
+  check, dry-run mode, path traversal protection in the browser API, strict
+  run-id validation for pin/delete
 
-## Voraussetzungen
+## Requirements
 
-- unRAID 6.12+ (6.10/6.11 funktionieren in der Regel ebenfalls)
-- Backup-Ziel **lokal** am Server gemountet (z. B. `/mnt/backup`), Dateisystem **ext4/xfs/btrfs** (harte Links nötig; FAT/exFAT wird abgelehnt)
-- `rsync` ist auf unRAID vorhanden; `php`/`flock`/`findmnt` sind Bestandteil von unRAID
+- unRAID 6.12+ (6.10/6.11 usually work as well)
+- Backup target mounted **locally** on the server (e.g. `/mnt/backup`),
+  filesystem **ext4/xfs/btrfs** (hard links required; FAT/exFAT is rejected)
+- `rsync` ships with unRAID; `php`/`flock`/`findmnt` are part of unRAID
 
 ## Installation
 
-> **Wichtig:** Frühere, fehlgeschlagene Installationsversuche hinterlassen alte
-> `.plg`-Kopien in `/boot/config/plugins-error/` (im WebUI: Plugins → Reiter
-> „Plugin File Install Errors"). Diese dort **löschen**, sonst werden sie bei
-> jedem Boot erneut installiert und schlagen ggf. wieder fehl. Ebenso eine alte
-> `/boot/config/plugins/arraybackup.plg` entfernen, bevor die neue installiert wird.
+> **Important:** earlier failed install attempts leave old `.plg` copies in
+> `/boot/config/plugins-error/` (WebUI: Plugins → tab "Plugin File Install
+> Errors"). **Delete them there**, otherwise they are re-installed on every
+> boot and may fail again. Also remove an old
+> `/boot/config/plugins/arraybackup.plg` before installing the new one.
 
-Lokale Installation (ohne GitHub-Repo):
+Local install (no GitHub repo):
 
-1. `arraybackup.plg` auf den USB-Flash-Stick kopieren, z. B. nach
-   `/boot/config/plugins/arraybackup.plg` (SMB-Freigabe `\\\\server\\boot\\config\\plugins\\`).
-2. WebUI → **Plugins**: die Plugin-Datei wird beim nächsten Boot automatisch
-   installiert, oder sofort über das Eingabefeld „Install Plugin" mit dem
-   Pfad `/boot/config/plugins/arraybackup.plg` (ggf. „Force Break" aktivieren,
-   wenn dieselbe Version schon gelistet ist). Alternativ in der Konsole:
+1. Copy `arraybackup.plg` to the USB flash stick, e.g.
+   `/boot/config/plugins/arraybackup.plg` (SMB share `\\server\boot\config\plugins\`).
+2. WebUI → **Plugins**: the file is installed automatically on the next boot,
+   or immediately via the "Install Plugin" box with the path
+   `/boot/config/plugins/arraybackup.plg` (enable "Force Break" if the same
+   version is already listed). Console alternative:
    `plugin install /boot/config/plugins/arraybackup.plg`
-3. WebUI neu laden → **Settings → ArrayBackup** erscheint im Menü.
-4. Tab **Konfiguration**: Ziel-Mountpoint eintragen (z. B. `/mnt/backup`), speichern.
-5. Erstmalig **Dry-Run** aktivieren und „Backup starten" klicken, dann Dry-Run aus und echten Lauf starten.
+3. Reload the WebUI → **Settings → ArrayBackup** appears in the menu.
+4. Tab **Configuration**: enter the target mountpoint (e.g. `/mnt/backup`), save.
+5. First time: enable **dry run** and click "Start backup", then turn dry run
+   off and start a real run.
 
-### Auto-Update über GitHub
+### Auto-update via GitHub
 
-`build.sh` setzt `pluginURL` auf
+`build.sh` sets `pluginURL` to
 `https://raw.githubusercontent.com/godghost123/back/main/unraid-array-backup/arraybackup.plg`.
-Damit „Check for Updates" in WebUI → Plugins funktioniert, muss das GitHub-Repo
-**öffentlich** sein (private Repos liefern auf raw.githubusercontent.com einen
-404, dann findet der Update-Check nichts und es „passiert einfach nichts").
+For "Check for Updates" in WebUI → Plugins to work, the GitHub repo must be
+**public** (private repos return 404 on raw.githubusercontent.com – the update
+check then finds nothing and "nothing happens").
 
-Nach dem Umschalten auf öffentlich (oder nach einem Update der URL in
-`build.sh`): Plugin einmal komplett **entfernen und neu installieren**, damit
-die auf dem Flash gespeicherte Kopie (`/boot/config/plugins/arraybackup.plg`)
-die neue `pluginURL` erhält. Ab dann genügt in Plugins → ArrayBackup →
-„Check for Updates" bzw. der Update-Button.
+After making it public (or after changing the URL in `build.sh`): **remove and
+re-install the plugin once** so the copy stored on flash
+(`/boot/config/plugins/arraybackup.plg`) picks up the new `pluginURL`.
+From then on, Plugins → ArrayBackup → "Check for Updates" is enough.
 
-### Update / erneut installieren
+### Update / re-install
 
-Der Plugin-Manager überschreibt vorhandische Dateien nur, wenn ihre SHA256
-im PLG nicht passt – das ist durch die generierten `<SHA256>`-Blöcke abgedeckt.
-Zwischenständen beim Entwickeln zusätzlich hilft:
+The plugin manager only overwrites existing files when their SHA256 in the PLG
+does not match – covered by the generated `<SHA256>` blocks. While developing,
+this additionally helps:
 
 ```bash
-rm -rf /usr/local/emhttp/plugins/arraybackup   # tmpfs, geht auch per Reboot
+rm -rf /usr/local/emhttp/plugins/arraybackup   # tmpfs, a reboot also does it
 plugin install /boot/config/plugins/arraybackup.plg
 ```
 
-Aus dem Quellcode bauen (Linux/macOS/Git-Bash):
+Building from source (Linux/macOS/Git-Bash):
 
 ```bash
-./build.sh   # erzeugt arraybackup.plg
+./build.sh   # regenerates arraybackup.plg, then validates it
 ```
 
-## Zielstruktur
+`build.sh` stamps `VERSION` (override with `VERSION=... ./build.sh`), embeds
+all `src/` payloads base64-encoded with `<SHA256>` blocks, and finally runs
+`tools/validate_plg.py` as a build gate – the build fails if the generated PLG
+does not parse or any base64/SHA256 mismatches.
+
+## Target layout
 
 ```
 /mnt/backup/
+├── .ab-staging/               # hidden; unfinished runs only (resume lives here)
+│   └── r-20261103-020000/     # being copied right now / resumable after abort
 ├── runs/
 │   └── r-20261103-020000/
-│       ├── .runmeta.json      # Status, Exit-Codes, logische & Delta-Größe pro Disk
-│       ├── .pinned            # nur wenn Lauf angeheftet
-│       ├── disk1/  disk2/ …   # Komplett-Sicht: Array „als Ganzes" gesichert
-├── latest -> runs/r-…         # letzter erfolgreicher Lauf
+│       ├── .runmeta.json      # state, exit codes, logical & delta size per disk
+│       ├── .pinned            # only when the run is pinned
+│       ├── disk1/  disk2/ …   # full-array view
+├── latest -> runs/r-…         # last successful run
 └── perdisk/
-    └── disk1/r-… -> ../../runs/r-…/disk1   # Disk-Historie (Symlinks)
+    └── disk1/r-… -> ../../runs/r-…/disk1   # disk history (symlinks)
 ```
 
-## Funktionsweise
+Promotion is: stage in `.ab-staging/` → copy → write `.runmeta.json` →
+same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
+`mv` fails, the run is marked failed and nothing in `runs/` changes.
 
-1. Engine prüft: Array läuft, Ziel gemountet, kein Backup auf das Array selbst, Dateisystem unterstützt harte Links, genug Freiraum.
-2. Neues Laufverzeichnis `runs/r-<JJJJMMTT-HHMMSS>/` wird angelegt.
-3. Pro Datendisk startet gleichzeitig ein `rsync -aHAX --numeric-ids --delete --link-dest=<letzter erfolgreicher Lauf>/<disk>`; `--link-dest` macht unveränderte Dateien zu harte Links.
-4. Nach Abschluss: `.runmeta.json` schreiben, `latest`-Symlink und `perdisk/`-Farm aktualisieren, Retention anwenden (Anzahl + Freiraum-Guard, gepinnte Läufe bleiben).
-5. Fortschritt liegt in `/var/run/arraybackup/status.json` (RAM), Lauf-Summen in `/boot/config/plugins/arraybackup/logs/` (flash-schonend).
+## How it works
 
-## Testanleitung
+1. Engine validates: array running, target mounted, target not on the array
+   itself, filesystem supports hard links, enough free space.
+2. A staged run directory `.ab-staging/r-<YYYYMMDD-HHMMSS>/` is created (or an
+   interrupted one is reused when resume is enabled).
+3. Per data disk, one
+   `rsync -aHAX --numeric-ids --delete-delay --partial-dir=.rsync-partial --link-dest=<last successful run>/<disk>`
+   runs concurrently (`max_jobs` caps concurrency, `bwlimit` throttles).
+   `--link-dest` hard-links unchanged files; `--delete-delay` only removes
+   orphans after the transfer, never mid-way.
+4. Transient rsync errors (10/11/12/30) retry up to 3 times with backoff;
+   exit 24 (vanished source files) counts as success; fatal codes abort.
+5. On success: `.runmeta.json` written, run atomically renamed into `runs/`,
+   `latest` and `perdisk/` updated, retention applied (count + free-space
+   guard, pinned runs kept).
+6. Live progress lives in `/var/run/arraybackup/status.json` (RAM); run
+   summaries in `/boot/config/plugins/arraybackup/logs/` (flash-friendly,
+   rotated at 1 MB).
 
-| Szenario | Vorgehen | Erwartung |
+## Test plan
+
+| Scenario | Steps | Expectation |
 |---|---|---|
-| Dry-Run | Dry-Run aktivieren, Start | rsync `-n`, es entsteht **kein** Laufverzeichnis |
-| Snapshot-Kette | 2 Läufe, danach `stat runs/r-*/disk1/<gleiche Datei>` | identische Inode = harter Link, Delta-Größe ≈ nur Änderungen |
-| Abbruch | Während Lauf „Stopp" | Lauf-Status `aborted`, nächster `--link-dest` bleibt der letzte `success` |
-| Doppelstart | Start während Lauf | zweite Engine bricht sofort mit Lock-Meldung ab |
-| Retention | `retention_runs=3`, 5 Läufe, einen pinnen | genau 3 unpinned behalten, gepinnt bleibt, `latest`/`perdisk` konsistent |
-| Selbst-Backup | Ziel auf `/mnt/disk1` zeigen lassen | Engine verweigert mit Fehlermeldung |
+| Dry run | enable dry run, start | rsync `-n`, **no** run directory left in `runs/` or `.ab-staging/` |
+| Snapshot chain | 2 runs, then `stat runs/r-*/disk1/<same file>` | same inode = hard link, delta size ≈ changes only |
+| Abort | press "Stop" during a run | state `aborted`, work stays in `.ab-staging/`, next `--link-dest` is still the last `success` |
+| Resume | start again after abort | staged run continues, already-copied files skipped (fast start, small delta) |
+| Resume off | disable "resume", start | staged leftovers are dropped, a fresh run begins |
+| Double start | start during a run | second engine exits immediately with the lock message |
+| Retention | `retention_runs=3`, 5 runs, pin one | exactly 3 unpinned kept, pinned survives, `latest`/`perdisk` consistent |
+| Self-backup | point target at `/mnt/disk1` | save is rejected in the WebUI; the engine also refuses |
 
-## Dateien
+## Files
 
-| Datei | Zweck |
+| File | Purpose |
 |---|---|
-| `arraybackup.plg` | fertiges Plugin-Manifest (generiert) |
-| `build.sh` | erzeugt das `.plg` aus `src/` |
-| `src/ArrayBackup.page` | WebUI mit `.page`-Header (`Menu="Settings"`); Tabs: Backups, Array-Browser, Disk-Historie, Konfiguration |
-| `src/install.sh` | Post-Install-Skript (Verzeichnisse, Default-Config, Cron auf Flash) |
-| `src/include/ajax.php` | JSON-API (`config-get/-save`, `start`, `stop`, `status`, `runs`, `ls`, `pin`, `delete-run`) |
-| `src/include/engine.sh` | Backup-Engine (Parallel-rsync, Snapshots, Retention, Logging) |
+| `arraybackup.plg` | finished plugin manifest (generated, checked in – it is what `pluginURL` serves) |
+| `build.sh` | generates the `.plg` from `src/` and runs the validator as a gate |
+| `tools/validate_plg.py` | verifies the PLG: XML parses, base64 decodes, SHA256 matches, no CRLF/BOM |
+| `src/ArrayBackup.page` | WebUI with `.page` header (`Menu="Settings"`); tabs: Backups, Array browser, Disk history, Configuration; single de/en string table |
+| `src/install.sh` | post-install script (directories, default config, cron on flash) |
+| `src/include/ajax.php` | JSON API (`config-get/-save`, `start`, `stop`, `status`, `runs`, `ls` [paged], `pin`, `delete-run`) |
+| `src/include/engine.sh` | backup engine (parallel rsync, staging + atomic promotion, retries, retention, log rotation) |
 
-## Bekannte Grenzen / Ausbaustufen
+## Known limits / future ideas
 
-- v1 spiegelt **Disks**, nicht Shares (Share-Union-View als Ausbaustufe denkbar)
-- keine Prüfsummen-Verifikation, keine Benachrichtigungen
-- Retention nach Anzahl statt GFS-Schema
+- v1 mirrors **disks**, not shares (a share union view is conceivable)
+- no checksum verification, no notifications
+- retention by count, not a GFS scheme

@@ -14,6 +14,7 @@ mkdir -p /boot/config/plugins/arraybackup/logs
   "max_jobs": 0,
   "bwlimit_kbps": 0,
   "dry_run": false,
+  "resume_aborted": true,
   "exclude_file": "/boot/config/plugins/arraybackup/excludes.txt",
   "schedule_enabled": false,
   "schedule_cron": "0 2 * * 7"

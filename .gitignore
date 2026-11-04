@@ -1,0 +1,10 @@
+# Local artefacts - keep the repo clean. NOTE: unraid-array-backup/arraybackup.plg
+# is deliberately NOT ignored: pluginURL points at it on raw.githubusercontent.com,
+# so the built manifest must stay committed for "Check for Updates" to work.
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+.venv/

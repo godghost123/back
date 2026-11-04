@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="2026.11.03.009"
+VERSION="${VERSION:-2026.11.04.002}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -20,6 +20,12 @@ b64() { tr -d '\r' < "$1" | base64 | tr -d '\n'; }
 # SHA256 derselben CR-freien Bytes: das erzwingt den Austausch veralteter
 # Dateien bei Update/Re-Install (der Manager ueberspringt sonst existierende).
 sha() { tr -d '\r' < "$1" | sha256sum | cut -d' ' -f1; }
+
+# Guard: Sources sollten im Checkout LF sein (.gitattributes regelt das; dieser
+# Check faengt Abweichungen ab, bevor ein PLG mit doppelten CRs gebaut wird).
+for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/install.sh; do
+  grep -q $'\r' "$f" && echo "WARN: $f enthaelt CRLF (core.autocrlf?) - baue trotzdem CR-frei" >&2
+done || true
 
 # Wichtig: Eine PLG ist EINE XML-Datei mit GENAU EINEM Wurzelelement <PLUGIN>.
 # Alle FILE-Elemente MUESSEN innerhalb von <PLUGIN>...</PLUGIN> stehen -
@@ -43,11 +49,21 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
-- Etappen-Betrieb: abgebrochene/gestoppte Laeufe werden beim naechsten Start
-  fortgesetzt (rsync --partial, Fortschritts-Schalter "Abbruch fortsetzen").
-  Damit kann auch das erste (Voll-)Backup in mehreren Etappen laufen.
-- Vorherige: pluginURL-Korrektur (Update-Fix), Fortschritts-Anzeige robust
-  gegen neue rsync-Formate, ausfuehrliche Fehlerausgabe (syslog + WebUI).
+- Atomic snapshots: every run builds inside .ab-staging/ on the target; only
+  after a successful completion it is renamed (same-FS, atomic) into runs/ and
+  the latest symlink is flipped. An aborted run never shows an apparently
+  complete snapshot in the visible chain.
+- rsync: --partial-dir=.rsync-partial instead of --partial (no truncated
+  files inside a snapshot), --delete-delay, retry (max. 3) with backoff on
+  transient failures (exit 10/11/12/30).
+- Status/runmeta JSON is built with php json_encode and validated before
+  writing - failure reasons now appear in the WebUI instead of vanishing.
+- WebUI: paged array browser (500 entries + "load more"), single string
+  table for all labels (de/en).
+- Target path validated on save; pin/delete require a strict run id
+  (r-YYYYMMDD-HHMMSS), reserved names such as latest are rejected.
+- Flash logs rotate when they exceed 1 MB.
+- Previous: staged resume (Etappen), pluginURL fix, robust progress parsing.
 </CHANGES>
 
 EOF
@@ -111,8 +127,26 @@ true
 EOF
 } > "$OUT"
 
-# Plausibilitaetscheck: genau ein Wurzelelement, keine Platzhalter mehr offen
+# Plausibilitaetscheck: genau ein Wurzelelement, keine offenen Platzhalter.
+# (Das fruehere `grep -c ... | grep -qv '^1$' && die Kette war falsch: bei genau
+# einem Treffer lief sie in einen Non-Zero-Exit, der Check wurde nie wirksam.)
 grep -q '</PLUGIN>' "$OUT" || { echo "ERROR: PLG hat kein schliessendes </PLUGIN>" >&2; exit 1; }
-grep -c '<PLUGIN' "$OUT" | grep -qv '^1$' && { echo "ERROR: mehr als ein PLUGIN-Wurzelelement" >&2; exit 1; }
+nroots=$(grep -c '<PLUGIN' "$OUT")
+[ "$nroots" = "1" ] || { echo "ERROR: $nroots PLUGIN-Wurzelelemente (erwartet: 1)" >&2; exit 1; }
+
+# Build-Gate: tools/validate_plg.py prueft XML, Base64-Payloads und SHA256 des
+# fertigen PLG. Dieses PLG wird ueber die raw-URL ausgeliefert und beim naechsten
+# Boot installiert - ein kaputtes PLG ist ein selbst verschuldeter Totalausfall,
+# deshalb bricht der Build hier ab statt es auszuliefern.
+if command -v python3 >/dev/null 2>&1; then PY=python3
+elif command -v python >/dev/null 2>&1; then PY=python
+elif command -v py >/dev/null 2>&1; then PY="py -3"
+elif command -v uv >/dev/null 2>&1; then PY="uv run --no-project python"
+else PY=""; fi
+if [ -n "$PY" ]; then
+  $PY tools/validate_plg.py "$OUT" || { echo "ERROR: validate_plg.py - PLG ungueltig, Build abgebrochen" >&2; exit 1; }
+else
+  echo "WARN: kein python gefunden - PLG-Validierung uebersprungen" >&2
+fi
 
 echo "built $OUT ($(wc -c < "$OUT") bytes)"

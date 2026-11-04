@@ -52,29 +52,29 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   <div id="ab-banner" class="ab-banner"></div>
 
   <div style="margin-bottom:12px">
-    <button class="ab-btn" id="ab-start">&#9654; Backup starten</button>
-    <button class="ab-btn warn" id="ab-stop">&#9632; Stopp</button>
+    <button class="ab-btn" id="ab-start" data-i18n="btn_start"></button>
+    <button class="ab-btn warn" id="ab-stop" data-i18n="btn_stop"></button>
     <span id="ab-global" class="ab-muted"></span>
   </div>
 
   <div class="ab-tabs">
-    <div class="ab-tab active" data-tab="backups">Backups</div>
-    <div class="ab-tab" data-tab="browser">Array-Browser</div>
-    <div class="ab-tab" data-tab="history">Disk-Historie</div>
-    <div class="ab-tab" data-tab="config">Konfiguration</div>
+    <div class="ab-tab active" data-tab="backups" data-i18n="tab_backups"></div>
+    <div class="ab-tab" data-tab="browser" data-i18n="tab_browser"></div>
+    <div class="ab-tab" data-tab="history" data-i18n="tab_history"></div>
+    <div class="ab-tab" data-tab="config" data-i18n="tab_config"></div>
   </div>
 
   <div class="ab-panel active" id="ab-panel-backups">
     <div class="ab-card" id="ab-live" style="display:none">
-      <b>Laufender Backup</b> <span id="ab-live-id" class="ab-mono ab-muted"></span>
+      <b data-i18n="live_title"></b> <span id="ab-live-id" class="ab-mono ab-muted"></span>
       <div id="ab-live-bars"></div>
     </div>
     <div class="ab-card">
-      <b>Array-Snapshots</b>
+      <b data-i18n="runs_title"></b>
       <table class="ab-table" id="ab-runs">
         <thead><tr>
-          <th>Lauf</th><th>Status</th><th>Disks</th><th>Gr&ouml;&szlig;e (logisch)</th>
-          <th>Delta</th><th>Dauer</th><th>Aktionen</th>
+          <th data-i18n="th_run"></th><th data-i18n="th_status"></th><th data-i18n="th_disks"></th><th data-i18n="th_size"></th>
+          <th data-i18n="th_delta"></th><th data-i18n="th_duration"></th><th data-i18n="th_actions"></th>
         </tr></thead>
         <tbody></tbody>
       </table>
@@ -83,44 +83,44 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
   <div class="ab-panel" id="ab-panel-browser">
     <div class="ab-card">
-      <b>Komplettsicherung ansehen</b>
+      <b data-i18n="full_title"></b>
       <div style="margin:8px 0">
-        Lauf: <select id="ab-run-select" style="padding:6px"></select>
+        <span data-i18n="lbl_run"></span> <select id="ab-run-select" style="padding:6px"></select>
       </div>
       <div class="ab-crumbs" id="ab-crumb1"></div>
-      <table class="ab-table" id="ab-browse1"><thead><tr><th>Name</th><th>Gr&ouml;&szlig;e</th><th>Ge&auml;ndert</th></tr></thead><tbody></tbody></table>
+      <table class="ab-table" id="ab-browse1"><thead><tr><th data-i18n="th_name"></th><th data-i18n="th_size2"></th><th data-i18n="th_modified"></th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 
   <div class="ab-panel" id="ab-panel-history">
     <div class="ab-card">
-      <b>Sicherung pro Disk</b>
+      <b data-i18n="perdisk_title"></b>
       <div style="margin:8px 0">
-        Disk: <select id="ab-disk-select" style="padding:6px"></select>
-        Snapshot: <select id="ab-snap-select" style="padding:6px"></select>
+        <span data-i18n="lbl_disk"></span> <select id="ab-disk-select" style="padding:6px"></select>
+        <span data-i18n="lbl_snap"></span> <select id="ab-snap-select" style="padding:6px"></select>
       </div>
       <div class="ab-crumbs" id="ab-crumb2"></div>
-      <table class="ab-table" id="ab-browse2"><thead><tr><th>Name</th><th>Gr&ouml;&szlig;e</th><th>Ge&auml;ndert</th></tr></thead><tbody></tbody></table>
+      <table class="ab-table" id="ab-browse2"><thead><tr><th data-i18n="th_name"></th><th data-i18n="th_size2"></th><th data-i18n="th_modified"></th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 
   <div class="ab-panel" id="ab-panel-config">
     <div class="ab-card">
       <div class="ab-grid">
-        <label>Ziel (RAID0-Mountpoint)</label><input type="text" id="cfg-target">
-        <label>Anzahl behaltener L&auml;ufe</label><input type="number" id="cfg-retention" min="1">
-        <label>Mindest-Freiraum (GB)</label><input type="number" id="cfg-minfree" min="0">
-        <label>Max. gleichzeitige Disks (0=alle)</label><input type="number" id="cfg-maxjobs" min="0">
-        <label>Bandbreite KB/s (0=unbegrenzt)</label><input type="number" id="cfg-bwlimit" min="0">
-        <label>Dry-Run (nur Testlauf)</label><input type="checkbox" id="cfg-dryrun">
-        <label>Abbruch fortsetzen (Etappen)</label><input type="checkbox" id="cfg-resume">
-        <label>Auschluss-Liste (rsync-Muster)</label><textarea id="cfg-excludes" placeholder="*.tmp&#10;System Volume Information/"></textarea>
-        <label>Zeitplan aktiviert</label><input type="checkbox" id="cfg-sched-en">
-        <label>Cron-Ausdruck</label><input type="text" id="cfg-sched-cron" placeholder="0 2 * * 7">
+        <label data-i18n="cfg_target"></label><input type="text" id="cfg-target">
+        <label data-i18n="cfg_retention"></label><input type="number" id="cfg-retention" min="1">
+        <label data-i18n="cfg_minfree"></label><input type="number" id="cfg-minfree" min="0">
+        <label data-i18n="cfg_maxjobs"></label><input type="number" id="cfg-maxjobs" min="0">
+        <label data-i18n="cfg_bwlimit"></label><input type="number" id="cfg-bwlimit" min="0">
+        <label data-i18n="cfg_dryrun"></label><input type="checkbox" id="cfg-dryrun">
+        <label data-i18n="cfg_resume"></label><input type="checkbox" id="cfg-resume">
+        <label data-i18n="cfg_excludes"></label><textarea id="cfg-excludes" placeholder="*.tmp&#10;System Volume Information/"></textarea>
+        <label data-i18n="cfg_sched_en"></label><input type="checkbox" id="cfg-sched-en">
+        <label data-i18n="cfg_sched_cron"></label><input type="text" id="cfg-sched-cron" placeholder="0 2 * * 7">
       </div>
-      <p class="ab-muted">Cron-Beispiel <span class="ab-mono">0 2 * * 7</span> = Sonntag 02:00. Der Zeitplan wird als <span class="ab-mono">arraybackup.cron</span> im Plugin-Ordner auf dem Flash gespeichert und beim Boot/Update automatisch in die System-Crontab eingebunden.</p>
-      <p class="ab-muted">Etappen-Betrieb: Bei aktivierter Fortsetzung wird ein gestoppter oder abgest&uuml;rzter Lauf beim n&auml;chsten Start fortgesetzt (rsync &uuml;berspringt bereits kopierte Dateien). Der erste (noch unvollst&auml;ndige) Lauf wird dadurch zum Vollbackup, jeder sp&auml;tere Lauf inkrementell.</p>
-      <button class="ab-btn" id="ab-save">Konfiguration speichern</button>
+      <p class="ab-muted" data-i18n="help_cron"></p>
+      <p class="ab-muted" data-i18n="help_stages"></p>
+      <button class="ab-btn" id="ab-save" data-i18n="btn_save"></button>
       <span id="ab-save-msg" class="ab-muted"></span>
     </div>
   </div>
@@ -132,6 +132,134 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   var CSRF = '<?=htmlspecialchars($__ab_csrf, ENT_QUOTES)?>';
   var pollTimer = null, lastRunning = false;
   var runsCache = [];
+
+  /* ---------- One string table for every label/message ---------- */
+  // Single source of truth: the HTML carries data-i18n keys, the JS uses T().
+  // A translation only has to be added here (plus applyI18n fills the HTML).
+  var LANG = 'de';
+  var STRINGS = {
+    de: {
+      btn_start:       'Backup starten',
+      btn_stop:        'Stopp',
+      tab_backups:     'Backups',
+      tab_browser:     'Array-Browser',
+      tab_history:     'Disk-Historie',
+      tab_config:      'Konfiguration',
+      live_title:      'Laufender Backup',
+      runs_title:      'Array-Snapshots',
+      th_run:          'Lauf',
+      th_status:       'Status',
+      th_disks:        'Disks',
+      th_size:         'Größe (logisch)',
+      th_delta:        'Delta',
+      th_duration:     'Dauer',
+      th_actions:      'Aktionen',
+      th_name:         'Name',
+      th_size2:        'Größe',
+      th_modified:     'Geändert',
+      full_title:      'Komplettsicherung ansehen',
+      perdisk_title:   'Sicherung pro Disk',
+      lbl_run:         'Lauf:',
+      lbl_disk:        'Disk:',
+      lbl_snap:        'Snapshot:',
+      cfg_target:      'Ziel (RAID0-Mountpoint)',
+      cfg_retention:   'Anzahl behaltener Läufe',
+      cfg_minfree:     'Mindest-Freiraum (GB)',
+      cfg_maxjobs:     'Max. gleichzeitige Disks (0=alle)',
+      cfg_bwlimit:     'Bandbreite KB/s (0=unbegrenzt)',
+      cfg_dryrun:      'Dry-Run (nur Testlauf)',
+      cfg_resume:      'Abbruch fortsetzen (Etappen)',
+      cfg_excludes:    'Ausschluss-Liste (rsync-Muster)',
+      cfg_sched_en:    'Zeitplan aktiviert',
+      cfg_sched_cron:  'Cron-Ausdruck',
+      help_cron:       'Cron-Beispiel 0 2 * * 7 = Sonntag 02:00. Der Zeitplan wird als arraybackup.cron im Plugin-Ordner auf dem Flash gespeichert und beim Boot/Update automatisch in die System-Crontab eingebunden.',
+      help_stages:     'Etappen-Betrieb: Bei aktivierter Fortsetzung wird ein gestoppter oder abgestürzter Lauf beim nächsten Start fortgesetzt (rsync überspringt bereits kopierte Dateien). Der erste (noch unvollständige) Lauf wird dadurch zum Vollbackup, jeder spätere Lauf inkrementell.',
+      btn_save:        'Konfiguration speichern',
+      global_running:  'Backup läuft…',
+      dry_run_tag:     '(Dry-Run)',
+      last_run:        'Letzter Lauf',
+      error_prefix:    'Fehler',
+      error_details:   '— Details: /boot/config/plugins/arraybackup/logs/engine.log, syslog (filter: arraybackup)',
+      target_unreach:  'Ziel nicht erreichbar:',
+      no_runs:         'Noch keine Backups vorhanden.',
+      unpin:           'löschen',
+      pin:             'anheften',
+      del_run:         'Löschen',
+      confirm_del:     'Lauf {run} wirklich löschen?',
+      no_disk_history: 'Keine Disk-Historie vorhanden.',
+      load_more:       'Mehr laden',
+      entries:         'Einträge',
+      loading:         'lade…',
+      root:            'root',
+      saved:           'Gespeichert.',
+      error_colon:     'Fehler:'
+    },
+    en: {
+      btn_start:       'Start backup',
+      btn_stop:        'Stop',
+      tab_backups:     'Backups',
+      tab_browser:     'Array browser',
+      tab_history:     'Disk history',
+      tab_config:      'Configuration',
+      live_title:      'Backup in progress',
+      runs_title:      'Array snapshots',
+      th_run:          'Run',
+      th_status:       'Status',
+      th_disks:        'Disks',
+      th_size:         'Size (logical)',
+      th_delta:        'Delta',
+      th_duration:     'Duration',
+      th_actions:      'Actions',
+      th_name:         'Name',
+      th_size2:        'Size',
+      th_modified:     'Modified',
+      full_title:      'Browse full snapshot',
+      perdisk_title:   'Per-disk backup',
+      lbl_run:         'Run:',
+      lbl_disk:        'Disk:',
+      lbl_snap:        'Snapshot:',
+      cfg_target:      'Target (RAID0 mountpoint)',
+      cfg_retention:   'Runs to keep',
+      cfg_minfree:     'Minimum free space (GB)',
+      cfg_maxjobs:     'Max concurrent disks (0=all)',
+      cfg_bwlimit:     'Bandwidth KB/s (0=unlimited)',
+      cfg_dryrun:      'Dry run (test only)',
+      cfg_resume:      'Resume aborted run (stages)',
+      cfg_excludes:    'Exclude list (rsync patterns)',
+      cfg_sched_en:    'Schedule enabled',
+      cfg_sched_cron:  'Cron expression',
+      help_cron:       'Cron example 0 2 * * 7 = Sunday 02:00. The schedule is stored as arraybackup.cron in the plugin folder on flash and re-attached to the system crontab on every boot/update.',
+      help_stages:     'Staged operation: when resume is enabled, a stopped or crashed run continues on the next start (rsync skips files already copied). This turns the first (incomplete) run into a full backup, every later run is incremental.',
+      btn_save:        'Save configuration',
+      global_running:  'Backup running…',
+      dry_run_tag:     '(dry run)',
+      last_run:        'Last run',
+      error_prefix:    'Error',
+      error_details:   '— details: /boot/config/plugins/arraybackup/logs/engine.log, syslog (filter: arraybackup)',
+      target_unreach:  'Target not reachable:',
+      no_runs:         'No backups yet.',
+      unpin:           'unpin',
+      pin:             'pin',
+      del_run:         'Delete',
+      confirm_del:     'Really delete run {run}?',
+      no_disk_history: 'No disk history present.',
+      load_more:       'Load more',
+      entries:         'entries',
+      loading:         'loading…',
+      root:            'root',
+      saved:           'Saved.',
+      error_colon:     'Error:'
+    }
+  };
+  function T(key) { return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.de[key] || key; }
+  function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(function (el) {
+      el.textContent = T(el.getAttribute('data-i18n'));
+    });
+    // icons stay outside the text so the table can be reused for any language
+    $('ab-start').textContent = '\u25B6 ' + T('btn_start');
+    $('ab-stop').textContent = '\u25A0 ' + T('btn_stop');
+  }
 
   function $(id) { return document.getElementById(id); }
   function api(action, params, method) {
@@ -187,7 +315,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       if (running) {
         live.style.display = 'block';
         $('ab-live-id').textContent = s.run_id || '';
-        $('ab-global').textContent = 'Backup läuft…' + (s.dry_run ? ' (Dry-Run)' : '');
+        $('ab-global').textContent = T('global_running') + (s.dry_run ? ' ' + T('dry_run_tag') : '');
         var bars = '';
         Object.keys(s.disks || {}).forEach(function (d) {
           var info = s.disks[d] || {};
@@ -199,11 +327,11 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         $('ab-live-bars').innerHTML = bars;
       } else {
         live.style.display = 'none';
-        $('ab-global').textContent = s.state ? 'Letzter Lauf ' + (s.run_id || '') + ': ' + s.state : '';
+        $('ab-global').textContent = s.state ? T('last_run') + ' ' + (s.run_id || '') + ': ' + s.state : '';
         // Fehlergrund aus status.json (engine.sh schreibt dorthin die Ursache)
         if (s.error && (s.state === 'failed' || s.state === 'partial')) {
-          banner('Fehler ' + (s.run_id || '') + ' (' + s.state + '): ' + s.error +
-                 ' — Details: /boot/config/plugins/arraybackup/logs/engine.log, syslog (filter: arraybackup)', 'err');
+          banner(T('error_prefix') + ' ' + (s.run_id || '') + ' (' + s.state + '): ' + s.error +
+                 ' ' + T('error_details'), 'err');
         }
       }
       if (lastRunning && !running) { loadRuns(); } // Lauf beendet -> Tabellen neu laden
@@ -214,13 +342,13 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   /* ---------- Runs table ---------- */
   function loadRuns() {
     api('runs', {}, 'GET').then(function (res) {
-      if (!res.ok) { banner('Ziel nicht erreichbar: ' + (res.error || ''), 'err'); return; }
+      if (!res.ok) { banner(T('target_unreach') + ' ' + (res.error || ''), 'err'); return; }
       banner('', '');
       runsCache = res.runs || [];
       var tb = $('ab-runs').querySelector('tbody');
       tb.innerHTML = '';
       if (!runsCache.length) {
-        tb.innerHTML = '<tr><td colspan="7" class="ab-muted">Noch keine Backups vorhanden.</td></tr>';
+        tb.innerHTML = '<tr><td colspan="7" class="ab-muted">' + esc(T('no_runs')) + '</td></tr>';
         return;
       }
       runsCache.forEach(function (r) {
@@ -242,8 +370,8 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
           '<td>' + fmtBytes(m.total_delta_bytes) + '</td>' +
           '<td>' + dur + '</td>' +
           '<td>' +
-            '<button class="ab-btn small ghost" data-act="pin" data-run="' + r.id + '">' + (r.pinned ? '&#128293; l&ouml;sen' : '&#128204; anheften') + '</button>' +
-            '<button class="ab-btn small warn" data-act="del" data-run="' + r.id + '">L&ouml;schen</button>' +
+            '<button class="ab-btn small ghost" data-act="pin" data-run="' + r.id + '">' + (r.pinned ? '&#128293; ' + esc(T('unpin')) : '&#128204; ' + esc(T('pin'))) + '</button>' +
+            '<button class="ab-btn small warn" data-act="del" data-run="' + r.id + '">' + esc(T('del_run')) + '</button>' +
           '</td>';
         tb.appendChild(tr);
       });
@@ -252,7 +380,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
           var run = b.dataset.run;
           if (b.dataset.act === 'pin') {
             api('pin', {run: run}).then(loadRuns);
-          } else if (confirm('Lauf ' + run + ' wirklich löschen?')) {
+          } else if (confirm(T('confirm_del').replace('{run}', run))) {
             api('delete-run', {run: run}).then(function (r2) {
               if (!r2.ok) banner(r2.error, 'err');
               loadRuns();
@@ -276,7 +404,75 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   });
 
   /* ---------- Array-Browser (Komplettsicht) ---------- */
-  var path1 = '';
+  // Directories with 100k+ entries used to be fetched whole (multi-MB JSON,
+  // frozen tab). The API now pages (offset/limit/truncated); we page here too.
+  var PAGE = 500;
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function browseState(tblId, crumbId, path) {
+    return { tbl: $(tblId), crumbs: $(crumbId), path: path, entries: [], done: 0, total: 0, truncated: false };
+  }
+  var view1 = browseState('ab-browse1', 'ab-crumb1', '');
+  var view2 = browseState('ab-browse2', 'ab-crumb2', '');
+
+  function loadMore(view) {
+    api('ls', { path: view.path, offset: view.done, limit: PAGE }, 'GET').then(function (res) {
+      if (!res.ok) {
+        view.tbl.querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">' + esc(res.error || '') + '</td></tr>';
+        return;
+      }
+      view.entries = view.entries.concat(res.entries || []);
+      view.done = res.offset + (res.count || 0);
+      view.total = res.total;
+      view.truncated = !!res.truncated;
+      renderBrowse(view, function (name) {
+        var p = view.path ? view.path + '/' + name : name;
+        if (view === view1) browse1(p); else browse2(p);
+      });
+    });
+  }
+  function crumbs(el, path, cb) {
+    var parts = path.split('/').filter(Boolean), acc = [], html = '';
+    html += '<a data-p="">' + esc(T('root')) + '</a>';
+    parts.forEach(function (p) { acc.push(p); html += ' / <a data-p="' + esc(acc.join('/')) + '">' + esc(p) + '</a>'; });
+    el.innerHTML = html;
+    el.querySelectorAll('a').forEach(function (a) {
+      a.addEventListener('click', function () { cb(a.dataset.p); });
+    });
+  }
+  function renderBrowse(view, onDir) {
+    var tb = view.tbl.querySelector('tbody');
+    tb.innerHTML = '';
+    view.entries.forEach(function (e) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + (e.dir ? '&#128193; <a href="#" class="ab-dir">' + esc(e.name) + '/</a>' : '&#128196; ' + esc(e.name)) + '</td>' +
+                     '<td>' + (e.dir ? '' : fmtBytes(e.size)) + '</td>' +
+                     '<td>' + new Date(e.mtime * 1000).toLocaleString() + '</td>';
+      if (e.dir) tr.querySelector('.ab-dir').addEventListener('click', function (ev) { ev.preventDefault(); onDir(e.name); });
+      tb.appendChild(tr);
+    });
+    if (view.truncated) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td colspan="3"><button class="ab-btn small ghost">' + esc(T('load_more')) + ' (' +
+                     (view.done) + ' / ' + view.total + ')</button></td>';
+      tr.querySelector('button').addEventListener('click', function () { loadMore(view); });
+      tb.appendChild(tr);
+    } else if (view.total > 0) {
+      var tr2 = document.createElement('tr');
+      tr2.innerHTML = '<td colspan="3" class="ab-muted">' + view.total + ' ' + esc(T('entries')) + '</td>';
+      tb.appendChild(tr2);
+    }
+  }
+  function resetAndLoad(view, path, browseFn) {
+    view.path = path;
+    view.entries = []; view.done = 0; view.total = 0; view.truncated = false;
+    view.tbl.querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">' + esc(T('loading')) + '</td></tr>';
+    crumbs(view.crumbs, path, browseFn);
+    loadMore(view);
+  }
   function loadRunOptions() {
     api('runs', {}, 'GET').then(function (res) {
       if (!res.ok) return;
@@ -287,45 +483,15 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         o.value = 'runs/' + r.id; o.textContent = r.id + ' (' + ((r.meta||{}).state || '?') + ')';
         sel.appendChild(o);
       });
-      path1 = sel.value || '';
-      browse1(path1);
+      resetAndLoad(view1, sel.value || '', browse1);
     });
   }
-  $('ab-run-select').addEventListener('change', function () { path1 = this.value; browse1(path1); });
-  function crumbs(el, path, cb) {
-    var parts = path.split('/').filter(Boolean), acc = [], html = '';
-    html += '<a data-p="">root</a>';
-    parts.forEach(function (p) { acc.push(p); html += ' / <a data-p="' + acc.join('/') + '">' + p + '</a>'; });
-    el.innerHTML = html;
-    el.querySelectorAll('a').forEach(function (a) {
-      a.addEventListener('click', function () { cb(a.dataset.p); });
-    });
-  }
-  function renderBrowse(tbl, entries, onDir) {
-    var tb = tbl.querySelector('tbody');
-    tb.innerHTML = '';
-    entries.forEach(function (e) {
-      var tr = document.createElement('tr');
-      tr.innerHTML = '<td>' + (e.dir ? '&#128193; <a href="#" class="ab-dir">' + e.name + '/</a>' : '&#128196; ' + e.name) + '</td>' +
-                     '<td>' + (e.dir ? '' : fmtBytes(e.size)) + '</td>' +
-                     '<td>' + new Date(e.mtime * 1000).toLocaleString() + '</td>';
-      if (e.dir) tr.querySelector('.ab-dir').addEventListener('click', function (ev) { ev.preventDefault(); onDir(e.name); });
-      tb.appendChild(tr);
-    });
-  }
-  function browse1(path) {
-    path1 = path;
-    crumbs($('ab-crumb1'), path, browse1);
-    api('ls', {path: path}, 'GET').then(function (res) {
-      if (!res.ok) { $('ab-browse1').querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">' + (res.error || '') + '</td></tr>'; return; }
-      renderBrowse($('ab-browse1'), res.entries, function (n) { browse1((path ? path + '/' : '') + n); });
-    });
-  }
+  $('ab-run-select').addEventListener('change', function () { resetAndLoad(view1, this.value, browse1); });
+  function browse1(path) { resetAndLoad(view1, path, browse1); }
 
   /* ---------- Disk-Historie ---------- */
-  var path2 = '';
   function loadDiskOptions() {
-    api('ls', {path: 'perdisk'}, 'GET').then(function (res) {
+    api('ls', {path: 'perdisk', limit: 100}, 'GET').then(function (res) {
       var sel = $('ab-disk-select');
       sel.innerHTML = '';
       ((res.ok ? res.entries : []) || []).filter(function (e) { return e.dir; }).forEach(function (e) {
@@ -334,11 +500,11 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         sel.appendChild(o);
       });
       if (sel.value) loadSnaps(sel.value);
-      else { $('ab-snap-select').innerHTML = ''; path2 = ''; $('ab-browse2').querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">Keine Disk-Historie vorhanden.</td></tr>'; }
+      else { $('ab-snap-select').innerHTML = ''; $('ab-browse2').querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">' + esc(T('no_disk_history')) + '</td></tr>'; }
     });
   }
   function loadSnaps(disk) {
-    api('ls', {path: 'perdisk/' + disk}, 'GET').then(function (res) {
+    api('ls', {path: 'perdisk/' + disk, limit: 100}, 'GET').then(function (res) {
       var sel = $('ab-snap-select');
       sel.innerHTML = '';
       ((res.ok ? res.entries : []) || []).filter(function (e) { return e.dir; }).reverse().forEach(function (e) {
@@ -346,24 +512,15 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         o.value = e.name; o.textContent = e.name;
         sel.appendChild(o);
       });
-      if (sel.value) path2 = 'perdisk/' + disk + '/' + sel.value;
-      else path2 = 'perdisk/' + disk;
-      browse2(path2);
+      var p = sel.value ? 'perdisk/' + disk + '/' + sel.value : 'perdisk/' + disk;
+      resetAndLoad(view2, p, browse2);
     });
   }
   $('ab-disk-select').addEventListener('change', function () { loadSnaps(this.value); });
   $('ab-snap-select').addEventListener('change', function () {
-    path2 = 'perdisk/' + $('ab-disk-select').value + '/' + this.value;
-    browse2(path2);
+    resetAndLoad(view2, 'perdisk/' + $('ab-disk-select').value + '/' + this.value, browse2);
   });
-  function browse2(path) {
-    path2 = path;
-    crumbs($('ab-crumb2'), path, browse2);
-    api('ls', {path: path}, 'GET').then(function (res) {
-      if (!res.ok) { $('ab-browse2').querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">' + (res.error || '') + '</td></tr>'; return; }
-      renderBrowse($('ab-browse2'), res.entries, function (n) { browse2((path ? path + '/' : '') + n); });
-    });
-  }
+  function browse2(path) { resetAndLoad(view2, path, browse2); }
 
   /* ---------- Config ---------- */
   function loadConfig() {
@@ -395,11 +552,12 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       schedule_enabled: $('cfg-sched-en').checked ? 1 : 0,
       schedule_cron: $('cfg-sched-cron').value
     }).then(function (res) {
-      $('ab-save-msg').textContent = res.ok ? 'Gespeichert.' : ('Fehler: ' + res.error);
+      $('ab-save-msg').textContent = res.ok ? T('saved') : (T('error_colon') + ' ' + res.error);
     });
   });
 
   /* ---------- init ---------- */
+  applyI18n();
   loadConfig();
   loadRuns();
   pollStatus();

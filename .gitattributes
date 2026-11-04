@@ -1,0 +1,12 @@
+# Force LF for everything that is base64-embedded into the .plg (CRLF in a
+# shell/php payload breaks it on install; build.sh additionally strips CR).
+*.sh          text eol=lf
+*.php         text eol=lf
+*.page        text eol=lf
+*.md          text eol=lf
+*.py          text eol=lf
+*.cron        text eol=lf
+
+# The generated manifest must not be touched by any EOL conversion: it is
+# served verbatim from raw.githubusercontent.com and parsed by emhttp.
+arraybackup.plg -text
