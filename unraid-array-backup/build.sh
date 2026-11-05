@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.04.002}"
+VERSION="${VERSION:-2026.11.05.001}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -49,6 +49,10 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: "target is not a mount point" for subdirectories of a mounted target.
+  findmnt is now called as --target=PATH; the previous "-T -- PATH" form made
+  getopt consume "--" as the value of -T, so the real path became an exact-
+  match mountpoint filter and every subfolder of a mount was rejected.
 - Atomic snapshots: every run builds inside .ab-staging/ on the target; only
   after a successful completion it is renamed (same-FS, atomic) into runs/ and
   the latest symlink is flipped. An aborted run never shows an apparently

@@ -184,11 +184,15 @@ validate() {
 
   [ -e "$CFG_TARGET" ] || die "backup target does not exist: $CFG_TARGET (check the path in the plugin settings; mount it first, e.g. via the 'Tools' plugin or an NFS/UDM mount)"
   [ -d "$CFG_TARGET" ] || die "backup target path is not a directory: $CFG_TARGET"
-  # `--` everywhere a user-configured path follows options: a target beginning
-  # with '-' (or a typo like "-P") must never be parsed as an option (task 2).
-  findmnt -T -- "$CFG_TARGET" >/dev/null 2>&1 || die "target is not a mount point: $CFG_TARGET"
-  if ! findmnt -T -- "$CFG_TARGET" -o TARGET,FSTYPE,SOURCE 2>/dev/null | grep -qiE 'btrfs|ext[234]|xfs|zfs|ntfs|vfat'; then
-    log "note: target filesystem type: $(findmnt -T -- "$CFG_TARGET" -no FSTYPE 2>/dev/null || echo unknown)"
+  # findmnt uses --target=PATH (the "=" form), NOT "-T -- PATH": getopt_long
+  # would consume a bare "--" as the VALUE of -T, turning the real path into a
+  # positional filter that must equal a mountpoint exactly. That breaks the
+  # intended "walk up to the containing filesystem" behaviour and rejects
+  # subdirectories of real mounts with "target is not a mount point".
+  # The "=" form still protects against targets starting with '-'.
+  findmnt --target="$CFG_TARGET" >/dev/null 2>&1 || die "cannot resolve a filesystem for the backup target (not mounted or gone?): $CFG_TARGET"
+  if ! findmnt --target="$CFG_TARGET" -o TARGET,FSTYPE,SOURCE 2>/dev/null | grep -qiE 'btrfs|ext[234]|xfs|zfs|ntfs|vfat'; then
+    log "note: target filesystem type: $(findmnt --target="$CFG_TARGET" -no FSTYPE 2>/dev/null || echo unknown)"
   fi
   [ -w "$CFG_TARGET" ] || die "backup target is not writable (permissions/share read-only?): $CFG_TARGET"
 
