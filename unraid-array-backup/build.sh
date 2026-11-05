@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.05.002}"
+VERSION="${VERSION:-2026.11.05.003}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -42,13 +42,25 @@ cat <<EOF
   pluginURL="https://raw.githubusercontent.com/${OWNER}/${REPO}/main/${PLG_PATH}"
   support="https://github.com/${OWNER}/${REPO}/issues"
   project="https://github.com/${OWNER}/${REPO}"
-  launch="Settings/ArrayBackup"
+  launch="user/ArrayBackup"
   icon="disk"
   min="6.10.0">
 
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Layout change: all sources (/mnt/diskN AND pool mounts like /mnt/cache) now
+  write into ONE shared snapshot tree runs/RUN-ID/fs/ (per run). A file moved by the mover
+  between two runs keeps its path in the backup and is hard-linked via the
+  shared --link-dest (delta ~ 0) instead of being copied again. NOTE: the first
+  run with the new layout copies completely (old diskN/-runs cannot link into
+  it); afterwards runs are incremental. Old runs stay browsable and prune per
+  retention. Deletions (file gone on disk or on cache) are mirrored per share
+  after the transfers by an orphan-sweep (find+comm+rm, guarded; never via
+  rsync --delete from an empty helper). Pool shares that never land on the
+  array (e.g. Cache -> Backup) are NOT secured (warning banner only). Config:
+  backup_pools, pool_filter, skip_shares; shareUseCache parsing (key name on
+  server verified). UI entry moved from Settings to User Utilities.
 - Fix: successful runs showing status "?" in the table. A failed
   .runmeta.json write was silent and the run was promoted anyway. Writes are
   now checked (retry with minimal meta, loud syslog on failure), promotion is
@@ -81,8 +93,8 @@ EOF
 #     (so wie es /usr/local/emhttp/plugins/dynamix.plugin.manager/scripts/plugin
 #     erwartet). install.sh erhaelt zusaetzlich Run="/bin/bash", laeuft also
 #     bei Installation/Update/Boot (Cron re-instashen auf dem Flash-Overlay).
-#     ArrayBackup.page registriert sich ueber seinen .page-Header (Menu="Settings")
-#     automatisch im Settings-Menue der WebUI. ---
+#     ArrayBackup.page registriert sich ueber seinen .page-Header (Menu="user")
+#     in den "User Utilities"-Raster der WebUI; launch accordingly. ---
 for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/install.sh; do
   if [ "$f" = "src/install.sh" ]; then
     dest="/boot/config/plugins/arraybackup/install.sh"; mode="0755"; run=" Run=\"/bin/bash\""

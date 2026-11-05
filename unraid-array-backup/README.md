@@ -68,7 +68,8 @@ Local install (no GitHub repo):
    `/boot/config/plugins/arraybackup.plg` (enable "Force Break" if the same
    version is already listed). Console alternative:
    `plugin install /boot/config/plugins/arraybackup.plg`
-3. Reload the WebUI → **Settings → ArrayBackup** appears in the menu.
+3. Reload the WebUI → **User Utilities → ArrayBackup** appears in the icon
+   grid below (like User Scripts / Docker Stats), not in Settings.
 4. Tab **Configuration**: enter the target mountpoint (e.g. `/mnt/backup`), save.
 5. First time: enable **dry run** and click "Start backup", then turn dry run
    off and start a real run.
@@ -112,17 +113,28 @@ does not parse or any base64/SHA256 mismatches.
 
 ```
 /mnt/backup/
-├── .ab-staging/               # hidden; unfinished runs only (resume lives here)
-│   └── r-20261103-020000/     # being copied right now / resumable after abort
+├── .ab-staging/                # hidden; unfinished runs only (resume lives here)
+│   └── r-20261103-020000/fs/   # ONE shared tree while copying
 ├── runs/
-│   └── r-20261103-020000/
-│       ├── .runmeta.json      # state, exit codes, logical & delta size per disk
-│       ├── .pinned            # only when the run is pinned
-│       ├── disk1/  disk2/ …   # full-array view
-├── latest -> runs/r-…         # last successful run
-└── perdisk/
-    └── disk1/r-… -> ../../runs/r-…/disk1   # disk history (symlinks)
+│   ├── r-20261103-020000/
+│   │   ├── .runmeta.json       # state, exit/delta per source, swept, orphans
+│   │   ├── .pinned             # only when the run is pinned
+│   │   └── fs/                 # merged view: disks AND pools in one tree
+│   └── r-20261101-…/disk1/…    # legacy runs (old per-disk layout) stay
+├── latest -> runs/r-…          # last successful run
+├── perdisk/
+│   └── disk1/r-… -> ../../runs/r-…/fs               # source history
+└── pershare/
+    └── appdata/r-… -> ../../runs/r-…/fs/appdata     # per-share history
 ```
+
+Because every source writes into the same `fs/` subtree, the path of a file in
+the backup does not depend on which mount it came from: a file the mover moved
+(cache → array) between two runs keeps its path and is hard-linked via the one
+shared `--link-dest` instead of being transferred again. Promotion is: stage in
+`.ab-staging/` → transfers → orphan-sweep → write `.runmeta.json` → same-FS
+`mv` into `runs/` → flip `latest`/`perdisk`/`pershare` symlinks → prune. If the
+`mv` fails, the run is marked failed and nothing in `runs/` changes.
 
 Promotion is: stage in `.ab-staging/` → copy → write `.runmeta.json` →
 same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
@@ -134,17 +146,31 @@ same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
    itself, filesystem supports hard links, enough free space.
 2. A staged run directory `.ab-staging/r-<YYYYMMDD-HHMMSS>/` is created (or an
    interrupted one is reused when resume is enabled).
-3. Per data disk, one
-   `rsync -aHAX --numeric-ids --delete-delay --partial-dir=.rsync-partial --link-dest=<last successful run>/<disk>`
-   runs concurrently (`max_jobs` caps concurrency, `bwlimit` throttles).
-   `--link-dest` hard-links unchanged files; `--delete-delay` only removes
-   orphans after the transfer, never mid-way.
-4. Transient rsync errors (10/11/12/30) retry up to 3 times with backoff;
+3. Per **source** — every data disk AND every pool mount (`/mnt/cache`, …; the
+   target mount is never a source) — one
+   `rsync -aHAX --numeric-ids --partial-dir=.rsync-partial --link-dest=<last successful run>/fs`
+   runs concurrently into the SAME `fs/` subtree (`max_jobs` caps concurrency,
+   `bwlimit` throttles). One shared `--link-dest` is the point: it makes the
+   mover-moved file a hard link (delta ≈ 0). There is deliberately **no**
+   `--delete` here – a job must never remove files other sources bring in.
+   A share filter applies the same `--exclude` set to every job and to the
+   sweep: `skip_shares`, `shareUseCache=only` from `/boot/config/shares/<share>.cfg`
+   (the key is `shareUseCache` on the server, older installs write `share_use`),
+   and an array-reality check (a share that exists on no `/mnt/diskN` is never
+   covered by this plugin → warning banner only).
+4. After **all** transfers a guarded orphan-sweep mirrors deletions per share:
+   union of the sources vs. the snapshot content; entries present nowhere
+   anymore get removed (`find`+`comm`+`rm`, deliberately not rsync `--delete`,
+   which from an empty helper source would empty the whole share). Guards: only
+   when the run is `success`, only inside the staging copy, every source still
+   mounted, and never more than 50 % of a share's entries (then the sweep
+   refuses and the run is demoted to `partial`).
+5. Transient rsync errors (10/11/12/30) retry up to 3 times with backoff;
    exit 24 (vanished source files) counts as success; fatal codes abort.
-5. On success: `.runmeta.json` written, run atomically renamed into `runs/`,
-   `latest` and `perdisk/` updated, retention applied (count + free-space
+6. On success: `.runmeta.json` written, run atomically renamed into `runs/`,
+   `latest`/`perdisk/`/`pershare/` updated, retention applied (count + free-space
    guard, pinned runs kept).
-6. Live progress lives in `/var/run/arraybackup/status.json` (RAM); run
+7. Live progress lives in `/var/run/arraybackup/status.json` (RAM); run
    summaries in `/boot/config/plugins/arraybackup/logs/` (flash-friendly,
    rotated at 1 MB).
 
@@ -153,7 +179,14 @@ same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
 | Scenario | Steps | Expectation |
 |---|---|---|
 | Dry run | enable dry run, start | rsync `-n`, **no** run directory left in `runs/` or `.ab-staging/` |
-| Snapshot chain | 2 runs, then `stat runs/r-*/disk1/<same file>` | same inode = hard link, delta size ≈ changes only |
+| Snapshot chain | 2 runs, then `stat runs/r-*/fs/<share>/<same file>` | same inode = hard link, delta size ≈ changes only |
+| **mover test** | run A, mover moves a file cache → disk, run B | same inode in `fs/`, its bytes are NOT in the delta (delta ≈ 0) — the core goal |
+| file on disk **and** pool | one file on `/mnt/disk1` and `/mnt/cache` | appears exactly **once** in `fs/` (no duplicate) |
+| deleted on disk/pool | delete a file, run | after the sweep the entry is gone from the new snapshot |
+| pool-only share | share `Cache → Backup` (exists on no disk) | **not** in the snapshot, info banner names it (`orphan_info`) |
+| skipped share | `skip_shares=docker` | not transferred; the sweep never deletes it either |
+| layout switch | first run after this update | copies completely (old per-disk runs cannot link into `fs/`); the next run is incremental |
+| resume, legacy run | abort an old-layout run, update, start | legacy staged run is not resumed (dropped); fresh `fs/`-run starts |
 | Abort | press "Stop" during a run | state `aborted`, work stays in `.ab-staging/`, next `--link-dest` is still the last `success` |
 | Resume | start again after abort | staged run continues, already-copied files skipped (fast start, small delta) |
 | Resume off | disable "resume", start | staged leftovers are dropped, a fresh run begins |
@@ -168,7 +201,7 @@ same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
 | `arraybackup.plg` | finished plugin manifest (generated, checked in – it is what `pluginURL` serves) |
 | `build.sh` | generates the `.plg` from `src/` and runs the validator as a gate |
 | `tools/validate_plg.py` | verifies the PLG: XML parses, base64 decodes, SHA256 matches, no CRLF/BOM |
-| `src/ArrayBackup.page` | WebUI with `.page` header (`Menu="Settings"`); tabs: Backups, Array browser, Disk history, Configuration; single de/en string table |
+| `src/ArrayBackup.page` | WebUI with `.page` header (`Menu="user"` → icon grid "User Utilities"); tabs: Backups, Array browser, Disk history, Configuration; single de/en string table |
 | `src/install.sh` | post-install script (directories, default config, cron on flash) |
 | `src/include/ajax.php` | JSON API (`config-get/-save`, `start`, `stop`, `status`, `runs`, `ls` [paged], `pin`, `delete-run`) |
 | `src/include/engine.sh` | backup engine (parallel rsync, staging + atomic promotion, retries, retention, log rotation) |

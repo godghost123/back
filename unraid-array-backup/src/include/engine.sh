@@ -24,6 +24,11 @@ STATS_DIR="${RUN_DIR}/stats"
 STAGING_SUBDIR=".ab-staging"
 
 DISKS=()
+POOLS=()
+SOURCES=()
+SHARES=()
+ORPHANS=()
+SHARE_EXC=""
 PIDS=()
 RUN_ID=""
 CFG_TARGET="/mnt/backup"
@@ -34,6 +39,11 @@ CFG_BWLIMIT=0
 CFG_DRYRUN=0
 CFG_RESUME=1
 CFG_EXCLUDES=""
+# Merged fs/ layout defaults (Kap. 4/5 of plans/vorschlag-cache-pool-backup.md).
+# These defaults MUST stay identical to src/install.sh and ajax.php load_config.
+CFG_BACKUP_POOLS=1
+CFG_POOL_FILTER=""
+CFG_SKIP_SHARES=""
 
 log() { echo "[$(date '+%F %T')] $*"; }
 
@@ -64,7 +74,8 @@ load_config() {
     $c = json_decode(file_get_contents($argv[1]), true) ?: [];
     $d = array("target"=>"/mnt/backup","retention_runs"=>14,"retention_min_free_gb"=>500,
                "max_jobs"=>0,"bwlimit_kbps"=>0,"dry_run"=>false,"resume_aborted"=>true,
-               "exclude_file"=>"/boot/config/plugins/arraybackup/excludes.txt");
+               "exclude_file"=>"/boot/config/plugins/arraybackup/excludes.txt",
+               "backup_pools"=>true,"pool_filter"=>"","skip_shares"=>"");
     $c += $d;
     printf("CFG_TARGET=%s\n",   escapeshellarg($c["target"]));
     printf("CFG_RETENTION=%d\n", max(1, (int)$c["retention_runs"]));
@@ -74,6 +85,9 @@ load_config() {
     printf("CFG_DRYRUN=%d\n",    !empty($c["dry_run"]) ? 1 : 0);
     printf("CFG_RESUME=%d\n",    !empty($c["resume_aborted"]) ? 1 : 0);
     printf("CFG_EXCLUDES=%s\n",  escapeshellarg((string)$c["exclude_file"]));
+    printf("CFG_BACKUP_POOLS=%d\n", !empty($c["backup_pools"]) ? 1 : 0);
+    printf("CFG_POOL_FILTER=%s\n", escapeshellarg((string)$c["pool_filter"]));
+    printf("CFG_SKIP_SHARES=%s\n", escapeshellarg((string)$c["skip_shares"]));
   ' "$CONF_FILE")"
 }
 
@@ -114,10 +128,10 @@ write_status() {
   local state="$1" run_id="$2" errmsg="${3:-}"
   local now d name pct rate eta ex last diskjson=""
   now=$(date '+%F %T')
-  for d in ${DISKS[@]+"${DISKS[@]}"}; do
-    name=$(basename "$d")
-    # name is a /mnt/disk[0-9]* leaf, so it is JSON-safe; everything free-form
-    # (error text) goes through json_escape instead of being pasted raw.
+  for d in ${SOURCES[@]+"${SOURCES[@]}"}; do
+    name=$(sanitize_token "$(basename "$d")")
+    # disk leaves are JSON-safe by construction; pool mount names got
+    # normalized through sanitize_token (spaces/special chars -> _)
     pct=""; rate=""; eta=""; ex=""
     if [ -f "$PROG_DIR/$name.log" ]; then
       # --info=progress2 changed layout between rsync versions (old:
@@ -143,7 +157,12 @@ write_status() {
     errj=$(json_escape "$(printf '%s' "$errmsg" | tr '\n\r' '  ')")
     [ -n "$errj" ] && errjson="\"error\":${errj},"   # drop (not corrupt) if escape failed
   fi
-  write_json "$STATUS_FILE" "\"state\":\"${state}\",\"run_id\":\"${run_id}\",\"updated\":\"${now}\",${errjson}\"dry_run\":$([ "$CFG_DRYRUN" -gt 0 ] && echo true || echo false),\"disks\":{${diskjson}}"
+  # orphan warning surfaced in the WebUI banner (Kap. 4.8: warning only)
+  local orjson=""
+  if [ ${#ORPHANS[@]} -gt 0 ]; then
+    orjson="\"orphan\":$(json_escape "$(printf '%s ' "${ORPHANS[@]}")" 2>/dev/null | tr '\n' ' '),"
+  fi
+  write_json "$STATUS_FILE" "\"state\":\"${state}\",\"run_id\":\"${run_id}\",\"updated\":\"${now}\",${errjson}${orjson}\"dry_run\":$([ "$CFG_DRYRUN" -gt 0 ] && echo true || echo false),\"sources\":{${diskjson}}"
 }
 
 running_count() {
@@ -177,8 +196,156 @@ rotate_logs() {
   done
 }
 
+# ---------------------------------------------------------------------------
+# Merged fs/-Layout (plans/vorschlag-cache-pool-backup.md): alle Sources
+# (Array-Disks + Pools) write into ONE shared target tree runs/<id>/fs/.
+# A relative Pfad is therefore storage-location independent: a file moved by
+# the mover (cache -> array) keeps its target path and gets hard-linked via
+# --link-dest instead of copied again (delta ~ 0). Consequence: --delete per
+# Job is impossible in the shared tree (a disk-job would delete foreign
+# files) -> deletions happen in sweep_orphans() after ALL transfers, per
+# share, as a set difference (find/comm/rm) - NOT via rsync --delete from
+# an empty helper source (that would empty the whole share dir).
+# ---------------------------------------------------------------------------
+
+# Token for progress/status files and JSON keys. Mount names (diskN) stay
+# untouched; user-defined pool names may contain spaces/special chars ->
+# normalize them (the old "disk leaf is JSON-safe" assumption in write_status
+# must not be relied on for pool names).
+sanitize_token() {
+  local t="$1"
+  printf '%s' "${t//[^A-Za-z0-9._-]/_}"
+}
+
+# Pools = every /mnt/* that is neither an Array-disk, a unRAID-internal mount
+# nor the Backup-Target itself, and that has a real filesystem. Also feeds
+# the Self-Backup-Guard (target may not be a pool mount).
+discover_pools() {
+  local d rp target_rp
+  target_rp=$(realpath -- "$CFG_TARGET" 2>/dev/null || true)
+  POOLS=()
+  for d in /mnt/*; do
+    [ -d "$d" ] || continue
+    case "$(basename "$d")" in
+      disk[0-9]*|user|recycle|unraid|remotes|.array|.ab-staging) continue ;;
+    esac
+    rp=$(realpath -- "$d" 2>/dev/null) || continue
+    # the target itself is often a pool mount (/mnt/backup) - it must never
+    # become a source (that would back up the Backup into itself)
+    [ "$rp" = "$target_rp" ] && continue
+    findmnt --target="$d" -no FSTYPE 2>/dev/null | grep -qiE 'btrfs|xfs|ext[234]|zfs' || continue
+    POOLS+=("$d")
+  done
+  # optional pool_filter: comma list of mount names, empty = all
+  if [ -n "$CFG_POOL_FILTER" ]; then
+    local -a keep=()
+    for d in ${POOLS[@]+"${POOLS[@]}"}; do
+      for rp in ${CFG_POOL_FILTER//,/ }; do
+        [ "$(basename "$d")" = "${rp// /}" ] && keep+=("$d") && break
+      done
+    done
+    POOLS=("${keep[@]+"${keep[@]}"}")
+  fi
+}
+
+# Share decision (per top-level dir, Kap. 4.3 of the plan):
+# 1) skip_shares (manual)            -> exclude
+# 2) shareUseCache=only|system       -> exclude (secured separately)
+#    Key verified on server: docker.cfg contains shareUseCache="only";
+#    older installs write share_use -> accept both spellings.
+# 3) Array-Realitaets-Check: dir exists on at least one /mnt/diskN -> secure;
+#    otherwise it never lands on the array (e.g. Cache -> Backup) -> orphan,
+#    warning only, excluded.
+cfg_share_use() {
+  # echoes "" (unknown) | only | prefer | auto | no ... (lowercase)
+  local f="/boot/config/shares/$1.cfg" v=""
+  [ -f "$f" ] || return 0
+  v=$(grep -oiE 'shareUseCache[[:space:]]*=[[:space:]]*"?[A-Za-z]*"?' "$f" 2>/dev/null | head -n1)
+  [ -n "$v" ] || v=$(grep -oiE 'share_use[[:space:]]*=[[:space:]]*"?[A-Za-z]*"?' "$f" 2>/dev/null | head -n1)
+  v=${v#*=}
+  printf '%s' "${v//[^A-Za-z]/}" | tr 'A-Z' 'a-z'
+}
+
+# Build SHARES (covered), ORPHANS (warning) and EXC_ARGS (rsync excludes,
+# used by EVERY job AND by the sweep so skipped shares are never deleted).
+discover_shares() {
+  local s name use d on_array
+  SHARES=(); ORPHANS=(); EXC_ARGS=()
+  local -A cand=()
+  for s in ${SOURCES[@]+"${SOURCES[@]}"}; do
+    for name in "$s"/*/; do
+      [ -d "$name" ] || continue
+      cand["${name##*/}"]=1
+    done
+  done
+  for name in "${!cand[@]}"; do
+    case ",${CFG_SKIP_SHARES// /,}," in
+      *",$name,"*)
+        log "share $name: skipped (skip_shares)"
+        EXC_ARGS+=("--exclude=/$name/"); continue ;;
+    esac
+    use=$(cfg_share_use "$name")
+    on_array=0
+    for d in "${DISKS[@]}"; do
+      [ -d "$d/$name" ] && on_array=1
+    done
+    if [ "$use" = only ] || [ "$use" = system ]; then
+      log "share $name: skipped (shareUseCache=$use, secured separately)"
+      EXC_ARGS+=("--exclude=/$name/")
+    elif [ "$on_array" -eq 0 ]; then
+      ORPHANS+=("$name")
+      log "orphan $name: exists only on pool(s), never moved to the array - NOT secured by this run"
+      EXC_ARGS+=("--exclude=/$name/")
+    else
+      SHARES+=("$name")
+    fi
+  done
+}
+
+# Orphan-Sweep per Share after ALL transfers (Kap. 3, decided):
+# Union of sources (A) vs. target content (B); B-A deleted via find+comm+rm.
+# Guards: only when every expected source is still mounted; never more than
+# 50 % of a share's entries (source gone / mount problem -> refuse, the run
+# is demoted to partial and stays unstaged); .rsync-partial trees protected
+# (resume needs them, they get cleaned only after the transfers).
+sweep_orphans() {
+  local stage_root="$1" fsroot="$1/fs" s share a_list b_list orphans del tot
+  for s in ${SOURCES[@]+"${SOURCES[@]}"}; do
+    findmnt --target="$s" >/dev/null 2>&1 || {
+      log "sweep skipped: source $s is not mounted anymore (its files would falsely orphan)"
+      return 1
+    }
+  done
+  local total_deleted=0
+  for share in ${SHARES[@]+"${SHARES[@]}"}; do
+    a_list=$(for s in "${SOURCES[@]}"; do
+      [ -d "$s/$share" ] && find "$s/$share" -mindepth 1 -name '.rsync-partial*' -prune -o -printf '%P\n' 2>/dev/null
+    done | sort -u)
+    b_list=$(find "$fsroot/$share" -mindepth 1 -name '.rsync-partial*' -prune -o -printf '%P\n' 2>/dev/null | sort -u)
+    orphans=$(comm -13 <(printf '%s\n' "$a_list") <(printf '%s\n' "$b_list") 2>/dev/null)
+    tot=$(printf '%s\n' "$b_list" | grep -c . || true)
+    del=$(printf '%s\n' "$orphans" | grep -c '[^[:space:]]' || true)
+    if [ "${tot:-0}" -gt 0 ] && [ "${del:-0}" -gt $((tot/2)) ]; then
+      log "sweep ABORTED for share $share: $del of $tot entries vanished in source - suspicious, no deletions this sweep"
+      syslog_err "arraybackup: sweep for $share aborted (too many orphans: $del/$tot)"
+      return 1
+    fi
+    while IFS= read -r a_file; do
+      [ -n "$a_file" ] || continue
+      rm -rf -- "$fsroot/$share/$a_file"
+      total_deleted=$((total_deleted+1))
+    done <<< "$orphans"
+    find "$fsroot/$share" -mindepth 1 -depth -type d -empty -delete 2>/dev/null
+  done
+  # partial dirs of completed transfers must not land in the snapshot
+  find "$fsroot" -mindepth 2 -type d -name '.rsync-partial*' -exec rm -rf -- {} + 2>/dev/null
+  log "sweep done: $total_deleted orphaned entries removed"
+  SWEEP_DELETED=$total_deleted
+  return 0
+}
+
 validate() {
-  local d rt avail_kb need_kb t
+  local d rt avail_kb need_kb t pool_rp
   command -v rsync >/dev/null 2>&1 || die "rsync not found on this system - plugin requires rsync"
   command -v php   >/dev/null 2>&1 || die "php not found on this system - cannot parse config"
 
@@ -207,6 +374,26 @@ validate() {
     /mnt/disk[0-9]*|/mnt/user*|/mnt/share*)
       die "refusing to back up onto the array itself: $rt" ;;
   esac
+  # merged layout: pool detection feeds the Self-Backup-Guard (a pool as
+  # target must never become a source) and the source list.
+  discover_pools
+  if [ "$CFG_BACKUP_POOLS" -eq 0 ]; then POOLS=(); fi
+  SOURCES=()
+  for d in "${DISKS[@]}"; do SOURCES+=("$d"); done
+  for d in ${POOLS[@]+"${POOLS[@]}"}; do SOURCES+=("$d"); done
+  for d in /mnt/*; do
+    [ -d "$d" ] || continue
+    case "$(basename "$d")" in
+      disk[0-9]*|user|recycle|unraid|remotes|.array|.ab-staging) continue ;;
+    esac
+    if [ "$(realpath -- "$d" 2>/dev/null)" = "$rt" ]; then
+      log "note: the target $rt is a pool mount - it is NOT used as a source, its content is not covered by this plugin"
+      break
+    fi
+  done
+  discover_shares
+  [ ${#SHARES[@]} -gt 0 ] || die "no share covered (every top-level dir is pool-only or excluded) - is the array started or are shares misconfigured?"
+  log "sources: ${#DISKS[@]} disks + ${#POOLS[@]} pools, ${#SHARES[@]} shares covered, ${#ORPHANS[@]} orphans"
 
   t="$CFG_TARGET/.ab_linktest.$$"
   if ! (touch -- "$t" && ln -- "$t" "$t.2" 2>/dev/null && rm -f -- "$t" "$t.2"); then
@@ -270,7 +457,7 @@ heal_run_meta() {
     fi
     log "run $id has no usable .runmeta.json - healed one from history.log (state=$st)"
     syslog_err "arraybackup: run $id lacked .runmeta.json (WebUI showed '?'), healed from history.log (state=$st)"
-    write_json "$meta" "$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"","healed":true,"dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"disks":{}' \
+    write_json "$meta" "$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"","healed":true,"dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"disks":{},"sources":{}' \
       "$id" "$st" "$(id_ts "$id")" "${lg:-0}" "${dl:-0}")"
   done
 }
@@ -287,7 +474,7 @@ prune() {
     kept=$((kept+1))
     if [ "$kept" -gt "$CFG_RETENTION" ]; then
       rm -rf -- "$runs_dir/$r"
-      for pd in "$CFG_TARGET"/perdisk/*/"$r"; do
+      for pd in "$CFG_TARGET"/perdisk/*/"$r" "$CFG_TARGET"/pershare/*/"$r"; do
         [ -L "$pd" ] && rm -f -- "$pd"
       done
       log "retention: removed run $r"
@@ -308,7 +495,7 @@ prune() {
       done
       [ -z "$victim" ] && break
       rm -rf -- "$runs_dir/$victim"
-      for pd in "$CFG_TARGET"/perdisk/*/"$victim"; do
+      for pd in "$CFG_TARGET"/perdisk/*/"$victim" "$CFG_TARGET"/pershare/*/"$victim"; do
         [ -L "$pd" ] && rm -f -- "$pd"
       done
       log "disk space guard: removed run $victim"
@@ -368,23 +555,42 @@ run_backup() {
     kind=${resume%%:*}; rid=${resume#*:}
     if [ "$kind" = stage ]; then
       stage_root="$stage_base/$rid"
-      prev_started=$(grep -oE '"started"[[:space:]]*:[[:space:]]*"[^"]+"' "$stage_root/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
-      log "resuming staged run $rid - already copied files are skipped"
+      # mixed-layout guard (Kap. 10.6 "only migration"): a staged run that was
+      # built with the OLD per-disk layout (dirs diskN/, no fs/) must not be
+      # continued into the new shared fs tree - the layouts would mix within
+      # one run id. Such leftovers simply get dropped and the retention
+      # prunes the old visible runs.
+      if [ ! -d "$stage_root/fs" ]; then
+        log "staged run $rid has the legacy (per-disk) layout - not resumed, dropped; new runs start in the fs/ layout"
+        rm -rf -- "$stage_root"
+        stage_root=""
+      else
+        prev_started=$(grep -oE '"started"[[:space:]]*:[[:space:]]*"[^"]+"' "$stage_root/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
+        log "resuming staged run $rid - already copied files are skipped"
+      fi
     else
       # legacy promoted-but-incomplete run: pull it into staging first so it can
       # never be mistaken for a finished snapshot while we continue it. If the
       # move fails, do NOT keep the id: promoting into the still-existing
       # runs/$rid later would NEST the staged dir inside it (mv into a
       # directory), leaving the stale old run visible. Start fresh instead.
-      mkdir -p "$stage_base"
-      stage_root="$stage_base/$rid"
-      if ! mv "$runs_dir/$rid" "$stage_root"; then
-        rmdir -- "$stage_root" 2>/dev/null
-        stage_root=""
-        log "could not move run $rid into staging (permissions?) - starting a fresh run instead"
+      # a promoted-but-incomplete run of the OLD layout is never resumed into
+      # the fs/ tree: leave it in runs/ (it shows up as partial/aborted) and
+      # start a fresh run in the new layout; retention cleans the old one.
+      if [ -d "$runs_dir/$rid" ] && [ ! -d "$runs_dir/$rid/fs" ]; then
+        log "run $rid has the legacy (per-disk) layout - not resumed (stays visible), starting fresh in the fs/ layout"
+        resume=""
       else
-        prev_started=$(grep -oE '"started"[[:space:]]*:[[:space:]]*"[^"]+"' "$stage_root/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
-        log "resuming interrupted run $rid (moved into staging) - already copied files are skipped"
+        mkdir -p "$stage_base"
+        stage_root="$stage_base/$rid"
+        if ! mv "$runs_dir/$rid" "$stage_root"; then
+          rmdir -- "$stage_root" 2>/dev/null
+          stage_root=""
+          log "could not move run $rid into staging (permissions?) - starting a fresh run instead"
+        else
+          prev_started=$(grep -oE '"started"[[:space:]]*:[[:space:]]*"[^"]+"' "$stage_root/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
+          log "resuming interrupted run $rid (moved into staging) - already copied files are skipped"
+        fi
       fi
     fi
     [ -n "$stage_root" ] && RUN_ID="$rid"
@@ -401,22 +607,26 @@ run_backup() {
   started=$(date '+%F %T')
   [ -n "$prev_started" ] && started="$prev_started"
   write_status "running" "$RUN_ID"
-  log "run $RUN_ID started (disks: ${#DISKS[@]}, dry_run=$CFG_DRYRUN, link-dest=${latest_abs:-none})"
+  log "run $RUN_ID started (sources: ${#SOURCES[@]} = ${#DISKS[@]} disks + ${#POOLS[@]} pools, shares: ${#SHARES[@]}, dry_run=$CFG_DRYRUN, link-dest=${latest_abs:-none})"
 
   PIDS=()
-  for d in "${DISKS[@]}"; do
-    name=$(basename "$d")
-    dest="$stage_root/$name"
-    # --partial-dir keeps an interrupted file OUT of the snapshot (hidden
-    # .rsync-partial/) yet lets a resumed run pick it up - with bare --partial a
-    # truncated file would sit in the snapshot looking like real data (task 2).
-    # --delete-delay (not plain --delete) + the R risk rule clean orphaned
-    # .rsync-partial leftovers only AFTER the transfer, so a resumed run can
-    # still use them and a promoted snapshot never contains a partial file.
-    args=(-aHAX --numeric-ids --delete-delay --stats --info=progress2 --partial-dir=.rsync-partial -f 'R .rsync-partial/')
-    if [ -n "$latest_abs" ] && [ -d "$latest_abs/$name" ]; then
-      args+=(--link-dest="$latest_abs/$name")
+  # Merged layout: every source writes into the SAME fs/ subdir of the staging
+  # run -> the relative Pfad of a file is storage-location independent, so a
+  # mover-move (cache -> array) between two runs keeps the target path and
+  # --link-dest hard-links it instead of re-copying (delta ~ 0).
+  # NO --delete here: a job must never remove files that other sources bring
+  # in - deletions are done per share by sweep_orphans() after the transfers.
+  mkdir -p "$stage_root/fs"
+  for d in "${SOURCES[@]}"; do
+    name=$(sanitize_token "$(basename "$d")")
+    dest="$stage_root/fs"
+    args=(-aHAX --numeric-ids --stats --info=progress2 --partial-dir=.rsync-partial -f 'R .rsync-partial/')
+    if [ -n "$latest_abs" ] && [ -d "$latest_abs/fs" ]; then
+      args+=(--link-dest="$latest_abs/fs")
     fi
+    for ex in ${EXC_ARGS[@]+"${EXC_ARGS[@]}"}; do
+      args+=("$ex")
+    done
     [ -n "$CFG_EXCLUDES" ] && [ -f "$CFG_EXCLUDES" ] && args+=(--exclude-from="$CFG_EXCLUDES")
     [ "$CFG_BWLIMIT" -gt 0 ] && args+=(--bwlimit="$CFG_BWLIMIT")
     [ "$CFG_DRYRUN" -eq 1 ] && args+=(-n)
@@ -461,8 +671,8 @@ run_backup() {
 
   state="success"
   local fail_detail=""
-  for d in "${DISKS[@]}"; do
-    name=$(basename "$d")
+  for d in "${SOURCES[@]}"; do
+    name=$(sanitize_token "$(basename "$d")")
     ec=$(cat "$STATS_DIR/$name.exit" 2>/dev/null || echo 1)
     if [ "$ec" != "0" ] && [ "$ec" != "24" ]; then
       state="partial"
@@ -483,31 +693,51 @@ run_backup() {
     return 0
   fi
 
-  for d in "${DISKS[@]}"; do
-    name=$(basename "$d")
-    local logical delta
-    logical=$(du -sb "$stage_root/$name" 2>/dev/null | awk '{print $1}' || true)
+  # in a SHARED fs tree a per-source logical size is meaningless (files would
+  # be counted several times): the logical total is the du of the whole fs/
+  # once, the delta still per source (rsync stats report the actually
+  # transferred bytes - the mover test with delta~0 reads exactly this).
+  for d in "${SOURCES[@]}"; do
+    name=$(sanitize_token "$(basename "$d")")
+    local delta
     delta=$(awk '/^Total transferred file size:/{gsub(/,/,"",$5); print $5}' "$PROG_DIR/$name.log" 2>/dev/null || true)
-    [ -z "$logical" ] && logical=0
     [ -z "$delta" ] && delta=0
-    total_logical=$((total_logical + logical))
     total_delta=$((total_delta + delta))
     ec=$(cat "$STATS_DIR/$name.exit" 2>/dev/null || echo 1)
-    dmeta="${dmeta}\"${name}\":{\"exit\":${ec},\"logical_bytes\":${logical},\"delta_bytes\":${delta}},"
+    dmeta="${dmeta}\"${name}\":{\"exit\":${ec},\"delta_bytes\":${delta}},"
   done
   dmeta=${dmeta%,}
+  logical=$(du -sb "$stage_root/fs" 2>/dev/null | awk '{print $1}')
+  [ -z "$logical" ] && logical=0
+  total_logical=$logical
+  SWEEP_DELETED=0
+  # Orphan-Sweep: only on a clean successful run (a stopped or failed run is
+  # not berean); inside the staging copy, never against a visible snapshot.
+  if [ "$state" = "success" ]; then
+    if ! sweep_orphans "$stage_root"; then
+      state="partial"
+      log "run $RUN_ID demoted to partial: sweep aborted (source problem) - not promoted"
+    fi
+  fi
+  # orphans stay visible in the meta (warning only, no jobs - Kap. 4.8)
+  local ometa="[]"
+  if [ ${#ORPHANS[@]} -gt 0 ]; then
+    ometa=$(printf '%s\n' "${ORPHANS[@]}" | php -r '$l=array(); while(($x=fgets(STDIN))!==null){x=strim(x); if(x!="")l[]=x;} echo json_encode(l,64);')
+    [ -z "$ometa" ] && ometa="[]"
+  fi
+  SWEEP_JSON="${SWEEP_DELETED:-0}"
 
   # .runmeta.json holds the disk leaf names only (JSON-safe); composed as raw
   # JSON and validated by json_decode inside write_json. A failure here must
   # never pass silently - the WebUI would show the run as "?" (the WebUI reads
   # ONLY this file), so retry with a minimal meta and shout into the syslog.
   local rmbody
-  rmbody=$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"%s","dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"disks":{%s}' \
-    "$RUN_ID" "$state" "$started" "$(date '+%F %T')" "$total_logical" "$total_delta" "${dmeta%,}")
+  rmbody=$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"%s","dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"swept_deleted":%d,"orphan_dirs":%s,"sources":{%s}' \
+    "$RUN_ID" "$state" "$started" "$(date '+%F %T')" "$total_logical" "$total_delta" "${SWEEP_JSON:-0}" "$ometa" "${dmeta%,}")
   if ! write_json "$stage_root/.runmeta.json" "$rmbody"; then
     syslog_err "run $RUN_ID: full .runmeta.json write failed (disk full?) - retrying minimal"
     if ! write_json "$stage_root/.runmeta.json" \
-      "$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"%s","dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"disks":{}' \
+      "$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"%s","dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"sources":{}' \
         "$RUN_ID" "$state" "$started" "$(date '+%F %T')" "$total_logical" "$total_delta")"; then
       syslog_err "run $RUN_ID: .runmeta.json could NOT be written at all (disk full, permissions?) - run state only in engine.log/status.json"
     fi
@@ -531,10 +761,17 @@ run_backup() {
       die "could not move staged run $RUN_ID into runs/ (disk full, permissions, or target not one filesystem?)"
     fi
     ln -sfn "runs/$RUN_ID" "$CFG_TARGET/latest"
-    for d in "${DISKS[@]}"; do
-      name=$(basename "$d")
+    # perdisk still links to the shared fs tree (Disk-Historie stays browsable;
+    # legacy runs keep their own diskN dirs, Kap. 10.6 "only migration")
+    for d in "${SOURCES[@]}"; do
+      name=$(sanitize_token "$(basename "$d")")
       mkdir -p "$CFG_TARGET/perdisk/$name"
-      ln -sfn "../../runs/$RUN_ID/$name" "$CFG_TARGET/perdisk/$name/$RUN_ID"
+      ln -sfn "../../runs/$RUN_ID/fs" "$CFG_TARGET/perdisk/$name/$RUN_ID"
+    done
+    # pershare: one symlink chain per covered share (restore view per share)
+    for name in ${SHARES[@]+"${SHARES[@]}"}; do
+      mkdir -p "$CFG_TARGET/pershare/$name"
+      ln -sfn "../../runs/$RUN_ID/fs/$name" "$CFG_TARGET/pershare/$name/$RUN_ID"
     done
     # drop any abandoned staged leftovers from previous crashed runs
     find -- "$stage_base" -mindepth 1 -maxdepth 1 -type d -name 'r-*' -exec rm -rf -- {} +

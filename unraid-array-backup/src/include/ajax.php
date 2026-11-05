@@ -35,6 +35,11 @@ function load_config() {
         'exclude_file' => "$CONF_DIR/excludes.txt",
         'schedule_enabled' => false,
         'schedule_cron' => '0 2 * * 7',
+        // merged fs/ layout: sources = /mnt/diskN + pool mounts.
+        // MUST stay identical to src/install.sh and engine.sh load_config.
+        'backup_pools' => true,
+        'pool_filter' => '',
+        'skip_shares' => '',
     ];
     return $c;
 }
@@ -112,6 +117,11 @@ case 'config-save':
     $c['dry_run'] = !empty($_POST['dry_run']);
     $c['resume_aborted'] = !empty($_POST['resume_aborted']);
     $c['schedule_enabled'] = !empty($_POST['schedule_enabled']);
+    // backup_pools: checkbox -> absent field keeps the current value
+    if (isset($_POST['backup_pools'])) $c['backup_pools'] = !empty($_POST['backup_pools']);
+    foreach (['pool_filter','skip_shares'] as $k) {
+        if (isset($_POST[$k])) $c[$k] = trim($_POST[$k]);
+    }
     if (!empty($_POST['excludes'])) {
         @file_put_contents($c['exclude_file'], str_replace("\r\n", "\n", $_POST['excludes']));
     }
@@ -209,6 +219,7 @@ case 'delete-run':
     $isLatest = (realpath("$target/latest") === realpath($d));
     exec('rm -rf '.escapeshellarg($d));
     foreach (glob("$target/perdisk/*/$id") ?: [] as $link) @unlink($link);
+    foreach (glob("$target/pershare/*/$id") ?: [] as $link) @unlink($link);
     if ($isLatest) {
         @unlink("$target/latest");
         $dirs = glob("$target/runs/r-*", GLOB_ONLYDIR) ?: [];

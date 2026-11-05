@@ -1,4 +1,4 @@
-Menu="Settings:7"
+Menu="user"
 Title="ArrayBackup"
 Markdown="false"
 Tag="hdd"
@@ -113,6 +113,9 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         <label data-i18n="cfg_minfree"></label><input type="number" id="cfg-minfree" min="0">
         <label data-i18n="cfg_maxjobs"></label><input type="number" id="cfg-maxjobs" min="0">
         <label data-i18n="cfg_bwlimit"></label><input type="number" id="cfg-bwlimit" min="0">
+        <label data-i18n="cfg_backup_pools"></label><input type="checkbox" id="cfg-backup-pools">
+        <label data-i18n="cfg_pool_filter"></label><input type="text" id="cfg-pool-filter" placeholder="cache">
+        <label data-i18n="cfg_skip_shares"></label><input type="text" id="cfg-skip-shares" placeholder="docker, nfs-share">
         <label data-i18n="cfg_dryrun"></label><input type="checkbox" id="cfg-dryrun">
         <label data-i18n="cfg_resume"></label><input type="checkbox" id="cfg-resume">
         <label data-i18n="cfg_excludes"></label><textarea id="cfg-excludes" placeholder="*.tmp&#10;System Volume Information/"></textarea>
@@ -121,6 +124,8 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       </div>
       <p class="ab-muted" data-i18n="help_cron"></p>
       <p class="ab-muted" data-i18n="help_stages"></p>
+      <p class="ab-muted" data-i18n="help_merged"></p>
+      <p class="ab-muted" data-i18n="help_layout"></p>
       <button class="ab-btn" id="ab-save" data-i18n="btn_save"></button>
       <span id="ab-save-msg" class="ab-muted"></span>
     </div>
@@ -150,7 +155,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       runs_title:      'Array-Snapshots',
       th_run:          'Lauf',
       th_status:       'Status',
-      th_disks:        'Disks',
+      th_disks:        'Sources (Disks+Pools)',
       th_size:         'Größe (logisch)',
       th_delta:        'Delta',
       th_duration:     'Dauer',
@@ -173,6 +178,12 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       cfg_excludes:    'Ausschluss-Liste (rsync-Muster)',
       cfg_sched_en:    'Zeitplan aktiviert',
       cfg_sched_cron:  'Cron-Ausdruck',
+      cfg_backup_pools:'Pool as Source (cache, …; Target never source)',
+      cfg_pool_filter: 'Pool-Filter (Mountnames, Comma; leer=all)',
+      cfg_skip_shares: 'Shares to skip (Comma; z. B. Backup)',
+      help_merged:     'One snapshot tree (fs/) for all Sources: a file moved by the mover (cache → Array) keeps its path in the Backup and gets hard-linked (delta ≈ 0). Folders that exist only on Pools and never land on the Array are NOT secured (warning only).',
+      help_layout:     'First run with the new layout copies completely (old runs with diskN/-layout cannot link into it); later runs are incremental. Old runs stay browsable and are pruned per Retention.',
+      orphan_info:     'Not secured (Pool-only, never moved to Array):',
       help_cron:       'Cron-Beispiel 0 2 * * 7 = Sonntag 02:00. Der Zeitplan wird als arraybackup.cron im Plugin-Ordner auf dem Flash gespeichert und beim Boot/Update automatisch in die System-Crontab eingebunden.',
       help_stages:     'Etappen-Betrieb: Bei aktivierter Fortsetzung wird ein gestoppter oder abgestürzter Lauf beim nächsten Start fortgesetzt (rsync überspringt bereits kopierte Dateien). Der erste (noch unvollständige) Lauf wird dadurch zum Vollbackup, jeder spätere Lauf inkrementell.',
       btn_save:        'Konfiguration speichern',
@@ -206,7 +217,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       runs_title:      'Array snapshots',
       th_run:          'Run',
       th_status:       'Status',
-      th_disks:        'Disks',
+      th_disks:        'Sources (disks + pools)',
       th_size:         'Size (logical)',
       th_delta:        'Delta',
       th_duration:     'Duration',
@@ -229,6 +240,12 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       cfg_excludes:    'Exclude list (rsync patterns)',
       cfg_sched_en:    'Schedule enabled',
       cfg_sched_cron:  'Cron expression',
+      cfg_backup_pools:'Use pools as sources (cache etc.; target never source)',
+      cfg_pool_filter: 'Pool filter (mount names, comma; empty=all)',
+      cfg_skip_shares: 'Skip shares (comma; e.g. Backup)',
+      help_merged:     'One snapshot tree (fs/) for all sources: files moved by the mover (cache → array) keep their path in the backup and are hard-linked (delta ≈ 0). Folders that exist only on pools and never land on the array are not secured (warning only).',
+      help_layout:     'The first run with the new layout copies completely (old per-disk runs cannot link into it); later runs are incremental. Old runs stay browsable and are pruned per retention.',
+      orphan_info:     'Not secured (pool-only, never moved to array):',
       help_cron:       'Cron example 0 2 * * 7 = Sunday 02:00. The schedule is stored as arraybackup.cron in the plugin folder on flash and re-attached to the system crontab on every boot/update.',
       help_stages:     'Staged operation: when resume is enabled, a stopped or crashed run continues on the next start (rsync skips files already copied). This turns the first (incomplete) run into a full backup, every later run is incremental.',
       btn_save:        'Save configuration',
@@ -318,8 +335,8 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         $('ab-live-id').textContent = s.run_id || '';
         $('ab-global').textContent = T('global_running') + (s.dry_run ? ' ' + T('dry_run_tag') : '');
         var bars = '';
-        Object.keys(s.disks || {}).forEach(function (d) {
-          var info = s.disks[d] || {};
+        Object.keys(s.sources || s.disks || {}).forEach(function (d) {
+          var info = (s.sources || s.disks || {})[d] || {};
           var pct = parseFloat(info.pct) || 0;
           bars += '<div class="ab-bar"><div style="width:' + Math.min(100, pct) + '%"></div>' +
                   '<span>' + d + ' &nbsp; ' + (info.pct || '') + ' &nbsp; ' + (info.rate || '') +
@@ -333,6 +350,9 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         if (s.error && (s.state === 'failed' || s.state === 'partial')) {
           banner(T('error_prefix') + ' ' + (s.run_id || '') + ' (' + s.state + '): ' + s.error +
                  ' ' + T('error_details'), 'err');
+        } else if (s.orphan) {
+          // Orphan-Warning (Kap. 4.8: warning only, the content is NOT secured)
+          banner(T('orphan_info') + ' ' + (Array.isArray(s.orphan) ? s.orphan.join(', ') : s.orphan), 'info');
         }
       }
       if (lastRunning && !running) { loadRuns(); } // Lauf beendet -> Tabellen neu laden
@@ -354,8 +374,9 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       }
       runsCache.forEach(function (r) {
         var m = r.meta || {};
-        var disks = Object.keys(m.disks || {}).map(function (d) {
-          var ok = (m.disks[d].exit === 0 || m.disks[d].exit === 24);
+        var srcs = m.sources || m.disks || {};
+        var disks = Object.keys(srcs).map(function (d) {
+          var ok = (srcs[d].exit === 0 || srcs[d].exit === 24);
           return '<span title="' + d + '">' + (ok ? '&#9679;' : '&#10007;') + '</span>';
         }).join(' ');
         var dur = '';
@@ -480,8 +501,16 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       var sel = $('ab-run-select');
       sel.innerHTML = '';
       (res.runs || []).forEach(function (r) {
+        // merged fs/ layout: the content root of new runs is runs/<id>/fs.
+        // New meta has a "sources" map and NO "disks" map at all; legacy meta
+        // has "disks". Healed meta carries both (and "healed":true) - it is
+        // a run of the OLD layout, so it must keep the disk root.
+        var m = r.meta || {};
+        var hasDiskMap = m.disks && Object.keys(m.disks).length > 0;
+        var isMerged = m.sources && !m.healed && !hasDiskMap;
         var o = document.createElement('option');
-        o.value = 'runs/' + r.id; o.textContent = r.id + ' (' + ((r.meta||{}).state || '?') + ')';
+        o.value = 'runs/' + r.id + (isMerged ? '/fs' : '');
+        o.textContent = r.id + ' (' + (m.state || '?') + ')' + (isMerged ? ' fs' : ' old');
         sel.appendChild(o);
       });
       resetAndLoad(view1, sel.value || '', browse1);
@@ -538,6 +567,9 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       $('cfg-excludes').value = c.excludes || '';
       $('cfg-sched-en').checked = !!c.schedule_enabled;
       $('cfg-sched-cron').value = c.schedule_cron;
+      $('cfg-backup-pools').checked = c.backup_pools !== false;
+      $('cfg-pool-filter').value = c.pool_filter || '';
+      $('cfg-skip-shares').value = c.skip_shares || '';
     });
   }
   $('ab-save').addEventListener('click', function () {
@@ -551,7 +583,10 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       resume_aborted: $('cfg-resume').checked ? 1 : 0,
       excludes: $('cfg-excludes').value,
       schedule_enabled: $('cfg-sched-en').checked ? 1 : 0,
-      schedule_cron: $('cfg-sched-cron').value
+      schedule_cron: $('cfg-sched-cron').value,
+      backup_pools: $('cfg-backup-pools').checked ? 1 : 0,
+      pool_filter: $('cfg-pool-filter').value,
+      skip_shares: $('cfg-skip-shares').value
     }).then(function (res) {
       $('ab-save-msg').textContent = res.ok ? T('saved') : (T('error_colon') + ' ' + res.error);
     });

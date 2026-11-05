@@ -17,7 +17,10 @@ mkdir -p /boot/config/plugins/arraybackup/logs
   "resume_aborted": true,
   "exclude_file": "/boot/config/plugins/arraybackup/excludes.txt",
   "schedule_enabled": false,
-  "schedule_cron": "0 2 * * 7"
+  "schedule_cron": "0 2 * * 7",
+  "backup_pools": true,
+  "pool_filter": "",
+  "skip_shares": ""
 }
 JSON
 # .cron-Datei im Plugin-Ordner auf dem Flash: /usr/local/sbin/update_cron
