@@ -3,7 +3,7 @@
 <PLUGIN
   name="arraybackup"
   author="unraid-array-backup"
-  version="2026.11.05.003"
+  version="2026.11.05.004"
   url="https://raw.githubusercontent.com/godghost123/back/main/unraid-array-backup/arraybackup.plg"
   pluginURL="https://raw.githubusercontent.com/godghost123/back/main/unraid-array-backup/arraybackup.plg"
   support="https://github.com/godghost123/back/issues"
@@ -14,7 +14,7 @@
 
 <CHANGES>
 ##arraybackup
-###2026.11.05.003
+###2026.11.05.004
 - Layout change: all sources (/mnt/diskN AND pool mounts like /mnt/cache) now
   write into ONE shared snapshot tree runs/RUN-ID/fs/ (per run). A file moved by the mover
   between two runs keeps its path in the backup and is hard-linked via the

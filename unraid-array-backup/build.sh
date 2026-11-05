@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.05.003}"
+VERSION="${VERSION:-2026.11.05.004}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
