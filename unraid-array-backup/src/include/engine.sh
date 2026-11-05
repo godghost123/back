@@ -89,15 +89,21 @@ json_escape() {
 # status.json / .runmeta.json (it fails here instead), then re-encoded with
 # json_encode and moved into place atomically (tmp + rename).
 write_json() {
+  # Compact output (JSON_UNESCAPED_SLASHES only, NO JSON_PRETTY_PRINT): these
+  # files are machine-read, and engine.sh greps .runmeta.json for
+  # '"state":"..."' - pretty printing inserted a space after ':' and silently
+  # broke those greps (resume detection, mark_stale_runs).
+  # Failures are logged loudly: a run must never be promoted without meta
+  # just because a write hiccupped (disk full, permissions, php OOM).
   php -r '
     $f    = $argv[1];
     $body = implode(" ", array_slice($argv, 2));
     $doc  = json_decode("{" . $body . "}", true);
     if (!is_array($doc)) { fwrite(STDERR, "arraybackup: write_json got invalid object body\n"); exit 1; }
     $t = $f . ".tmp";
-    if (file_put_contents($t, json_encode($doc, 128|64) . "\n") === false) exit 1;
+    if (file_put_contents($t, json_encode($doc, 64) . "\n") === false) exit 1;
     exit(rename($t, $f) ? 0 : 1);
-  ' "$@" 2>/dev/null
+  ' "$@" 2>/dev/null || { log "WARN: could not write JSON: $1"; return 1; }
 }
 
 # The document is assembled through write_json (json_encode), never printf:
@@ -229,10 +235,43 @@ mark_stale_runs() {
   for r in "$runs_dir"/*/; do
     meta="$r.runmeta.json"
     [ -f "$meta" ] || continue
-    if grep -q '"state":"running"' "$meta" 2>/dev/null; then
-      sed -i 's/"state":"running"/"state":"aborted"/' "$meta"
+    # [[:space:]] tolerance: older builds wrote pretty-printed meta
+    if grep -qE '"state"[[:space:]]*:[[:space:]]*"running"' "$meta" 2>/dev/null; then
+      sed -i 's/"state"[[:space:]]*:[[:space:]]*"running"/"state":"aborted"/' "$meta"
       log "marked stale run as aborted: $(basename "$r")"
     fi
+  done
+}
+
+# r-YYYYMMDD-HHMMSS -> "YYYY-MM-DD HH:MM:SS" (pure bash, no date parsing)
+id_ts() {
+  local t=${1#r-}
+  printf '%s-%s-%s %s:%s:%s' "${t:0:4}" "${t:4:2}" "${t:6:2}" "${t:9:2}" "${t:11:2}" "${t:13:2}"
+}
+
+# A runs/ entry without usable .runmeta.json shows as "?" in the WebUI and
+# cannot be classified by find_resumable_run. Synthesize a minimal meta from
+# history.log (every finished run appends exactly one line there) so the
+# table tells the truth again - meta absence used to be permanent and silent.
+heal_run_meta() {
+  local runs_dir="$CFG_TARGET/runs" r id meta line st lg dl
+  [ -d "$runs_dir" ] || return 0
+  for r in "$runs_dir"/r-*/; do
+    [ -d "$r" ] || continue
+    id=$(basename "$r")
+    meta="$r.runmeta.json"
+    [ -f "$meta" ] && grep -qE '"state"[[:space:]]*:' "$meta" 2>/dev/null && continue
+    line=$(grep "^$id " "$LOG_DIR/history.log" 2>/dev/null | tail -n1)
+    st="unknown"; lg=0; dl=0
+    if [ -n "$line" ]; then
+      st=$(echo "$line" | awk '{print $2}')
+      lg=$(echo "$line" | sed -n 's/.* logical=\([0-9]*\).*/\1/p')
+      dl=$(echo "$line" | sed -n 's/.* delta=\([0-9]*\).*/\1/p')
+    fi
+    log "run $id has no usable .runmeta.json - healed one from history.log (state=$st)"
+    syslog_err "arraybackup: run $id lacked .runmeta.json (WebUI showed '?'), healed from history.log (state=$st)"
+    write_json "$meta" "$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"","healed":true,"dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"disks":{}' \
+      "$id" "$st" "$(id_ts "$id")" "${lg:-0}" "${dl:-0}")"
   done
 }
 
@@ -295,9 +334,11 @@ find_resumable_run() {
   for r in $(ls -1 "$runs_dir" 2>/dev/null | grep -E '^r-' | sort -r); do
     meta="$runs_dir/$r/.runmeta.json"
     if [ ! -f "$meta" ]; then echo "runs:$r"; return 0; fi
-    st=$(grep -oE '"state":"[a-z]+"' "$meta" | head -n1 | cut -d'"' -f4)
+    st=$(grep -oE '"state"[[:space:]]*:[[:space:]]*"[a-z]+"' "$meta" | head -n1 | cut -d'"' -f4)
     case "$st" in
-      aborted|partial|failed) echo "runs:$r"; return 0 ;;
+      # 'unknown' = meta was healed without a history.log line: treat as
+      # unfinished (safer side) - re-running rsync into it is just a verify.
+      aborted|partial|failed|unknown) echo "runs:$r"; return 0 ;;
     esac
   done
   return 1
@@ -327,16 +368,24 @@ run_backup() {
     kind=${resume%%:*}; rid=${resume#*:}
     if [ "$kind" = stage ]; then
       stage_root="$stage_base/$rid"
-      prev_started=$(grep -oE '"started":"[^"]+"' "$stage_root/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
+      prev_started=$(grep -oE '"started"[[:space:]]*:[[:space:]]*"[^"]+"' "$stage_root/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
       log "resuming staged run $rid - already copied files are skipped"
     else
       # legacy promoted-but-incomplete run: pull it into staging first so it can
-      # never be mistaken for a finished snapshot while we continue it.
+      # never be mistaken for a finished snapshot while we continue it. If the
+      # move fails, do NOT keep the id: promoting into the still-existing
+      # runs/$rid later would NEST the staged dir inside it (mv into a
+      # directory), leaving the stale old run visible. Start fresh instead.
       mkdir -p "$stage_base"
       stage_root="$stage_base/$rid"
-      mv "$runs_dir/$rid" "$stage_root" 2>/dev/null || stage_root=""
-      prev_started=$(grep -oE '"started":"[^"]+"' "${stage_root:-/nonexistent}/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
-      log "resuming interrupted run $rid (moved into staging) - already copied files are skipped"
+      if ! mv "$runs_dir/$rid" "$stage_root"; then
+        rmdir -- "$stage_root" 2>/dev/null
+        stage_root=""
+        log "could not move run $rid into staging (permissions?) - starting a fresh run instead"
+      else
+        prev_started=$(grep -oE '"started"[[:space:]]*:[[:space:]]*"[^"]+"' "$stage_root/.runmeta.json" 2>/dev/null | head -n1 | cut -d'"' -f4)
+        log "resuming interrupted run $rid (moved into staging) - already copied files are skipped"
+      fi
     fi
     [ -n "$stage_root" ] && RUN_ID="$rid"
   fi
@@ -449,13 +498,35 @@ run_backup() {
   dmeta=${dmeta%,}
 
   # .runmeta.json holds the disk leaf names only (JSON-safe); composed as raw
-  # JSON and validated by json_decode inside write_json.
-  write_json "$stage_root/.runmeta.json" \
-    "$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"%s","dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"disks":{%s}' \
-      "$RUN_ID" "$state" "$started" "$(date '+%F %T')" "$total_logical" "$total_delta" "${dmeta%,}")"
+  # JSON and validated by json_decode inside write_json. A failure here must
+  # never pass silently - the WebUI would show the run as "?" (the WebUI reads
+  # ONLY this file), so retry with a minimal meta and shout into the syslog.
+  local rmbody
+  rmbody=$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"%s","dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"disks":{%s}' \
+    "$RUN_ID" "$state" "$started" "$(date '+%F %T')" "$total_logical" "$total_delta" "${dmeta%,}")
+  if ! write_json "$stage_root/.runmeta.json" "$rmbody"; then
+    syslog_err "run $RUN_ID: full .runmeta.json write failed (disk full?) - retrying minimal"
+    if ! write_json "$stage_root/.runmeta.json" \
+      "$(printf '"run_id":"%s","state":"%s","started":"%s","finished":"%s","dry_run":false,"total_logical_bytes":%d,"total_delta_bytes":%d,"disks":{}' \
+        "$RUN_ID" "$state" "$started" "$(date '+%F %T')" "$total_logical" "$total_delta")"; then
+      syslog_err "run $RUN_ID: .runmeta.json could NOT be written at all (disk full, permissions?) - run state only in engine.log/status.json"
+    fi
+  fi
 
   if [ "$state" = "success" ]; then
+    # never promote a snapshot whose meta could not be written: the WebUI
+    # reads ONLY .runmeta.json, and a meta-less run shows up as "?" and is
+    # then mistaken for crashed work by resume detection. Keep it staged
+    # (resumable) instead and make the operator fix the real cause.
+    if [ ! -s "$stage_root/.runmeta.json" ]; then
+      die "run $RUN_ID finished but .runmeta.json is missing/empty (disk full?) - kept in staging, will resume after the cause is fixed"
+    fi
     # atomic same-filesystem promote: staged -> visible runs/ (task 1).
+    if [ -e "$runs_dir/$RUN_ID" ]; then
+      # must not happen (a resumed id either lives in staging or was moved
+      # there); if it does, mv would NEST the staged dir inside the old one.
+      die "run dir already exists in runs/: $RUN_ID (stale copy?) - refusing to promote, check and remove it manually"
+    fi
     if ! mv "$stage_root" "$runs_dir/$RUN_ID"; then
       die "could not move staged run $RUN_ID into runs/ (disk full, permissions, or target not one filesystem?)"
     fi
@@ -496,6 +567,7 @@ main() {
   load_config
   validate
   mark_stale_runs
+  heal_run_meta
   run_backup
 }
 

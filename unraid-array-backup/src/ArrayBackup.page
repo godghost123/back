@@ -36,6 +36,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .ab-chip.failed, .ab-chip.aborted { background: #c0392b; color: #fff; }
 .ab-chip.running { background: #2980b9; color: #fff; }
 .ab-chip.aborted-old { background: #7f8c8d; color: #fff; }
+.ab-chip.unknown { background: #7f8c8d; color: #fff; }
 .ab-bar { background: var(--input-bg,#1a1a1a); border: 1px solid var(--border-color,#555); border-radius: 6px; height: 22px; position: relative; margin: 4px 0; overflow: hidden; }
 .ab-bar > div { background: linear-gradient(90deg,#2980b9,#27ae60); height: 100%; width: 0%; transition: width .5s; }
 .ab-bar span { position: absolute; left: 8px; top: 2px; font-size: 12px; color: var(--text-color,#eee); }

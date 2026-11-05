@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.05.001}"
+VERSION="${VERSION:-2026.11.05.002}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -49,6 +49,11 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: successful runs showing status "?" in the table. A failed
+  .runmeta.json write was silent and the run was promoted anyway. Writes are
+  now checked (retry with minimal meta, loud syslog on failure), promotion is
+  refused without a readable meta, and existing runs stuck without meta are
+  healed automatically from history.log on the next engine start.
 - Fix: "target is not a mount point" for subdirectories of a mounted target.
   findmnt is now called as --target=PATH; the previous "-T -- PATH" form made
   getopt consume "--" as the value of -T, so the real path became an exact-
