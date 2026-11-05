@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.05.005}"
+VERSION="${VERSION:-2026.11.05.006}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -49,6 +49,12 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: "Start backup" did nothing. Share enumeration crashed with an empty
+  array subscript: glob entries end in a slash, so taking the name after the
+  last slash yielded an empty string; under set -e the engine then died
+  silently. Share names are now stripped of the trailing slash first. Also:
+  a source that CONTAINS the target (target=/mnt/backup/sub, /mnt/backup a
+  pool) is no longer used as source - that would copy the backup into itself.
 - Layout change: all sources (/mnt/diskN AND pool mounts like /mnt/cache) now
   write into ONE shared snapshot tree runs/RUN-ID/fs/ (per run). A file moved by the mover
   between two runs keeps its path in the backup and is hard-linked via the

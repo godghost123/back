@@ -230,9 +230,13 @@ discover_pools() {
       disk[0-9]*|user|recycle|unraid|remotes|.array|.ab-staging) continue ;;
     esac
     rp=$(realpath -- "$d" 2>/dev/null) || continue
-    # the target itself is often a pool mount (/mnt/backup) - it must never
-    # become a source (that would back up the Backup into itself)
-    [ "$rp" = "$target_rp" ] && continue
+    # A source may not contain or sit inside the target: target=/mnt/backup/
+    # sub/dir (common layout!) means /mnt/backup CONTAINS the Backup -> using
+    # it as a source would copy the Backup into itself (endless, and it would
+    # poison the sweep union). Only the exact mount was checked before - a
+    # containment check is needed in both directions.
+    case "$target_rp" in "$rp"/*) log "note: $d contains the backup target $target_rp - not used as source"; continue ;; esac
+    case "$rp" in "$target_rp"*) log "note: $d is inside the backup target - not used as source"; continue ;; esac
     findmnt --target="$d" -no FSTYPE 2>/dev/null | grep -qiE 'btrfs|xfs|ext[234]|zfs' || continue
     POOLS+=("$d")
   done
@@ -269,13 +273,20 @@ cfg_share_use() {
 # Build SHARES (covered), ORPHANS (warning) and EXC_ARGS (rsync excludes,
 # used by EVERY job AND by the sweep so skipped shares are never deleted).
 discover_shares() {
-  local s name use d on_array
+  local s name use d on_array nm
   SHARES=(); ORPHANS=(); EXC_ARGS=()
   local -A cand=()
   for s in ${SOURCES[@]+"${SOURCES[@]}"}; do
-    for name in "$s"/*/; do
-      [ -d "$name" ] || continue
-      cand["${name##*/}"]=1
+    for nm in "$s"/*/; do
+      [ -d "$nm" ] || continue
+      # glob entries end with a trailing slash -> "${nm##*/}" would be EMPTY
+      # (bad array subscript, and under set -e that silently KILLS the engine
+      # without a die-message: "Backup starten" then does nothing). Strip the
+      # slash first, then take the last component.
+      nm=${nm%/}
+      nm=${nm##*/}
+      [ -n "$nm" ] || continue
+      cand["$nm"]=1
     done
   done
   for name in "${!cand[@]}"; do
