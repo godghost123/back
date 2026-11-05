@@ -201,7 +201,7 @@ same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
 | `arraybackup.plg` | finished plugin manifest (generated, checked in – it is what `pluginURL` serves) |
 | `build.sh` | generates the `.plg` from `src/` and runs the validator as a gate |
 | `tools/validate_plg.py` | verifies the PLG: XML parses, base64 decodes, SHA256 matches, no CRLF/BOM |
-| `src/ArrayBackup.page` | WebUI with `.page` header (`Menu="user"` → icon grid "User Utilities", `Icon="hard-disk"`); tabs: Backups, Array browser, Disk history, Configuration; single de/en string table |
+| `src/ArrayBackup.page` | WebUI with `.page` header (`Menu="Utilities"` → the icon grid "User Utilities" (spelling proven on server), `Icon="hard-disk.png"`); tabs: Backups, Array browser, Disk history, Configuration; single de/en string table |
 | `src/include/hard-disk.png` | plugin icon for the User-Utilities tile, embedded base64 over its raw bytes (`.gitattributes`: `*.png -text`) |
 | `src/install.sh` | post-install script (directories, default config, cron on flash) |
 | `src/include/ajax.php` | JSON API (`config-get/-save`, `start`, `stop`, `status`, `runs`, `ls` [paged], `pin`, `delete-run`) |
