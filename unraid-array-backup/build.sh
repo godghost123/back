@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.05.007}"
+VERSION="${VERSION:-2026.11.05.008}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -60,6 +60,13 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: install aborted with "plugin: run failed: /bin/bash returned 1" - the
+  icon block (a ~20 KB base64 here-document inside a Run INLINE) is mangled on
+  the server ("here-document delimited by end-of-file", "base64: invalid
+  input"). Icon delivery reworked: a tiny mkdir Run-block first, then the PNG
+  as a plain base64 FILE element (same proven path as engine.sh's 50 KB
+  payload). Also fixes "Plugin not visible in Plugins tab" after the failed
+  install: re-run plugin install from the URL once.
 - Fix: plugin vanished from the Plugins tab (registration file
   /boot/config/plugins/arraybackup.plg was gone from flash - no update check
   possible, WebUI would die on reboot). install.sh now self-heals: every 30
@@ -144,21 +151,27 @@ for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/ins
   echo ""
 done
 
-# --- Icon: written by a Run script, NOT as a plain FILE element ---
-# Two proven server-side facts: (1) a FILE element under images/ was NOT
-# written (the plugin manager does not mkdir parents - the empty images/
-# dir came from a later Run block), so the tile had no icon. (2) Run blocks
-# with empty Name execute at install/boot. Hence the script itself does
-# mkdir -p and decodes the base64 of the RAW PNG (no tr -d '\r' - CR bytes
-# inside PNG data are legitimes and must be kept).
-echo "<FILE Run=\"/bin/bash\">"
-echo "<INLINE><![CDATA["
-echo "mkdir -p /usr/local/emhttp/plugins/arraybackup/images"
-echo "base64 -d >/usr/local/emhttp/plugins/arraybackup/images/hard-disk.png <<'PNGEOF'"
-base64 src/include/hard-disk.png | tr -d '\n' | fold -w 76
-echo "PNGEOF"
-echo "true"
-echo "]]></INLINE>"
+# --- Icon: mkdir-run-block FIRST, then plain base64 FILE element ---
+# Server-lesson (v004..v007): (1) the manager creates no parent dirs for FILE
+# elements -> images/ must exist before the PNG FILE is written (v004 was
+# silently skipped: empty images/). (2) a ~20 KB base64 HEREDOC inside a Run
+# INLINE is mangled on the server (install aborted: "run failed ... 1").
+# The base64 FILE path is proven (engine.sh 36 KB -> 50 KB inline decodes
+# fine). Binary-safe: NO tr -d '\r' for the PNG (raw bytes + their SHA256).
+cat <<'EOF'
+<FILE Run="/bin/bash">
+<INLINE><![CDATA[
+mkdir -p /usr/local/emhttp/plugins/arraybackup/images
+true
+]]></INLINE>
+</FILE>
+EOF
+echo ""
+echo "<FILE Name=\"/usr/local/emhttp/plugins/arraybackup/images/hard-disk.png\" Type=\"base64\" Mode=\"0644\">"
+echo "<INLINE>"
+base64 src/include/hard-disk.png | tr -d '\n'
+echo "</INLINE>"
+echo "<SHA256>$(sha256sum src/include/hard-disk.png | cut -d' ' -f1)</SHA256>"
 echo "</FILE>"
 echo ""
 
