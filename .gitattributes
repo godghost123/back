@@ -10,3 +10,7 @@
 # The generated manifest must not be touched by any EOL conversion: it is
 # served verbatim from raw.githubusercontent.com and parsed by emhttp.
 arraybackup.plg -text
+
+# Binary: the plugin icon is embedded base64 in the PLG over its RAW bytes -
+# any EOL conversion would corrupt the PNG.
+*.png -text

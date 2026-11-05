@@ -83,6 +83,9 @@ cat <<EOF
   table for all labels (de/en).
 - Target path validated on save; pin/delete require a strict run id
   (r-YYYYMMDD-HHMMSS), reserved names such as latest are rejected.
+- Icon: WebUI tile for the User-Utilities grid ships in the PLG
+  (images/hard-disk.png, base64 with raw bytes - CR bytes inside the PNG are
+  kept, hashing/encoding run over the un-modified file).
 - Flash logs rotate when they exceed 1 MB.
 - Previous: staged resume (Etappen), pluginURL fix, robust progress parsing.
 </CHANGES>
@@ -113,6 +116,20 @@ for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/ins
   echo "</FILE>"
   echo ""
 done
+
+# --- Icon (.page-Header Icon="hard-disk" -> images/hard-disk.png) ---
+# WICHTIG: BINAE Daten! Das b64()/sha() Oben stript CR (tr -d '\r') - fuer
+# Text-Payloads correct, aber ein PNG contains legitimes 0x0D-Bytes: stript
+# hem ware brger (PNG-chunk-checksums don't care, but a CR-stripped PNG is
+# malformed in general). Therefore encode/hash the ROH bytes here. The base64
+# output itself never contains CR, so the PLG stays CRLF-free as such.
+echo "<FILE Name=\"/usr/local/emhttp/plugins/arraybackup/images/hard-disk.png\" Type=\"base64\" Mode=\"0644\">"
+echo "<INLINE>"
+base64 src/include/hard-disk.png | tr -d '\n'
+echo "</INLINE>"
+echo "<SHA256>$(sha256sum src/include/hard-disk.png | cut -d' ' -f1)</SHA256>"
+echo "</FILE>"
+echo ""
 
 # --- Statische Dateien + Setup-Kommandos (als FILE Run, <cmd> gibt es nicht) ---
 cat <<'EOF'

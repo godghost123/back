@@ -350,11 +350,18 @@ Davon abhängig sind zwei Detailfragen:
 1. **`Menu`-Schreibweise**: `User Utilities` vs. `Plugins` vs.
    Section-Syntax wie `Settings:7`. Nur die Variante der bereits
    funktionierenden Kacheln ist verlässlich.
-2. **Icon**: dynamix-Plugins nutzen entweder `Icon=` im `.page`-Header oder
-   eine PNG unter `/usr/local/emhttp/plugins/<plugin>/images/`. Der Ordner
-   `images/` wird von [install.sh:7](../unraid-array-backup/src/install.sh:7)
-   und [build.sh:118](../unraid-array-backup/build.sh:118) bereits angelegt,
-   liegt aber leer – ohne Icon fällt die Kachel auf einen Standard zurück.
+2. **Icon (Update: PNG vorhanden)**: dynamix-Plugins nutzen entweder `Icon=`
+   im `.page`-Header oder eine PNG unter
+   `/usr/local/emhttp/plugins/arraybackup/images/`. Der Ordner `images/` wird
+   von [install.sh:7](../unraid-array-backup/src/install.sh:7) und
+   [build.sh:130](../unraid-array-backup/build.sh:130) angelegt, war aber leer.
+   Der Nutzer hat [`src/include/hard-disk.png`](../unraid-array-backup/src/include/hard-disk.png:1)
+   bereitgestellt. Einbinden über denselben base64-Mechanismus wie die anderen
+   Payloads (see chapter 12): `Type="base64"` + SHA256, Ziel
+   `.../images/arraybackup.png`; `Icon=arraybackup.png` im `.page`-Header.
+   Wichtig: für Binärdaten darf **kein** `tr -d '\r'` laufen (zerstört die
+   PNG), `.gitattributes` muss `*.png -text` bekommen, sonst können EOL-
+   Konvertierungen das Bild bei späteren Checkouts beschädigen.
 
 **Sichtbare Konsequenzen, die du kennen solltest:**
 
@@ -369,3 +376,50 @@ Davon abhängig sind zwei Detailfragen:
   („ArrayBackup“) – das macht emhttp aus `Title=` in
   [ArrayBackup.page:2](../unraid-array-backup/src/ArrayBackup.page:2), das
   bleibt unverändert.
+
+## 12. Problem nach dem Update: WebUI-Eintrag nicht sichtbar + Icon
+
+Symptom (Screenshot 2): Seite ist per Titel „ArrayBackup“ geöffnet, aber im
+User-Utilities-Raster fehlt die Kachel komplett (alphabetisch müsste sie vor
+„Auto Update Applications“ erscheinen). Das deckt sich mit zwei offenen
+Punkten aus Kap. 11: die `Menu`-Schreibweise war eine **Annahme**
+(`Menu="user"`), und das Icon fehlte.
+
+**Diagnose auf dem Server (vor jeder weiteren Änderung ausführen):**
+
+```
+head -3 /usr/local/emhttp/plugins/arraybackup/ArrayBackup.page
+grep -m1 -oE 'version="[^"]+"' /boot/config/plugins/arraybackup.plg
+ls -la /usr/local/emhttp/plugins/arraybackup/images/
+ls /boot/config/plugins-error/
+grep -H '^Menu=' /usr/local/emhttp/plugins/*/*.page | sort | uniq -c | sort -rn
+```
+
+Ergebnis-Logik:
+- `head -3` zeigt `Menu="user"` → neue Version ist installiert, aber der
+  Key passt nicht zu dieser unRAID-Version; die korrekte Schreibweise
+  liefert der letzte Befehl (Mehrheitswert der funktionierenden Kacheln,
+  z. B. `Menu="user"` vs. `Menu="Settings"`). Dann `.page`-Header +
+  `launch` im PLG anpassen und PLG neu bauen.
+- `head -3` zeigt `Menu="Settings:7"` → die **neue PLG wurde nicht
+  installiert** (Flash-Kopie alt, oder `plugins-error/`-Leiche installiert
+  die Alte). Dann Plugin entfernen, `plugins-error` leeren, neu installieren.
+
+**Icon-Integration (der abgelegte `src/include/hard-disk.png`):**
+
+1. [build.sh](../unraid-array-backup/build.sh:106): eigenes FILE-Element
+   `Type="base64"` → Ziel
+   `/usr/local/emhttp/plugins/arraybackup/images/hard-disk.png`.
+   **Binär-Sonderbehandlung:** Base64 und SHA256 über die **rohen** Bytes
+   (`base64 < f`, `sha256sum f`) – das bestehende `b64()`/`sha()` mit
+   `tr -d '\r'` würde die PNG zerstören (0x0D-Bytes in binären Daten sind
+   legitim). Das Base64-Alphabet enthält selbst kein CR, der
+   CRLF-Glob-Check des Validators bleibt also sauber.
+2. [.gitattributes](../unraid-array-backup/.gitattributes:1): `*.png -text`
+   ergänzen, damit EOL-Konvertierung das Bild nie anfässt.
+3. [ArrayBackup.page](../unraid-array-backup/src/ArrayBackup.page:1):
+   `Icon="hard-disk.png"` im Header (dynamix: Datei aus
+   `plugins/arraybackup/images/`, Name mit Endung).
+4. Version-Bump (2026.11.05.004) + `<CHANGES>` (Icon + UI-Umzug),
+   README-Dateitabelle (PNG-Zeile) ergänzen; PLG neu bauen (Validator-
+   Gate prüft Base64/SHA256 der PNG automatisch mit).
