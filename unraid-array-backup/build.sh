@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.05.006}"
+VERSION="${VERSION:-2026.11.05.007}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -14,6 +14,7 @@ OUT="arraybackup.plg"
 OWNER="${OWNER:-godghost123}"
 REPO="${REPO:-back}"
 PLG_PATH="${PLG_PATH:-unraid-array-backup/arraybackup.plg}"
+RAWURL="https://raw.githubusercontent.com/${OWNER}/${REPO}/main/${PLG_PATH}"
 
 # base64 als Einzeiler, ohne CR (CRLF aus Windows-Checkout -> kaputtes Base64)
 b64() { tr -d '\r' < "$1" | base64 | tr -d '\n'; }
@@ -26,6 +27,16 @@ sha() { tr -d '\r' < "$1" | sha256sum | cut -d' ' -f1; }
 for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/install.sh; do
   grep -q $'\r' "$f" && echo "WARN: $f enthaelt CRLF (core.autocrlf?) - baue trotzdem CR-frei" >&2
 done || true
+
+# Guard: install.sh (Self-heal des Registration-PLG) haelt die RAW-URL als
+# Duplikat. Driften die beiden auseinander, wuerde der Server von einer
+# anderen URL heilen als dieses PLG ausgeliefert wird -> Build abbrechen.
+if ! grep -qF "$RAWURL" src/install.sh; then
+  echo "ERROR: RAW-URL in src/install.sh weicht von build.sh ab:" >&2
+  echo "  build.sh : $RAWURL" >&2
+  echo "  install.sh enthaelt diese URL nicht - beide anpassen!" >&2
+  exit 1
+fi
 
 # Wichtig: Eine PLG ist EINE XML-Datei mit GENAU EINEM Wurzelelement <PLUGIN>.
 # Alle FILE-Elemente MUESSEN innerhalb von <PLUGIN>...</PLUGIN> stehen -
@@ -49,6 +60,14 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: plugin vanished from the Plugins tab (registration file
+  /boot/config/plugins/arraybackup.plg was gone from flash - no update check
+  possible, WebUI would die on reboot). install.sh now self-heals: every 30
+  min (cron) it re-fetches this PLG from the raw URL when the registration is
+  missing, and re-runs "plugin install" when the tmpfs payload is gone. If
+  this update cannot reach the server (no registration left): run once, on
+  the server console, "plugin install" with the raw URL of this PLG shown
+  at the top of the repository README.
 - Fix: "Start backup" did nothing. Share enumeration crashed with an empty
   array subscript: glob entries end in a slash, so taking the name after the
   last slash yielded an empty string; under set -e the engine then died
@@ -169,6 +188,7 @@ echo "arraybackup: directories ready"
 <INLINE><![CDATA[
 rm -rf /usr/local/emhttp/plugins/arraybackup
 rm -rf /boot/config/plugins/arraybackup
+/usr/local/sbin/update_cron
 true
 ]]></INLINE>
 </FILE>

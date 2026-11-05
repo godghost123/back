@@ -46,12 +46,15 @@ function load_config() {
 
 function write_cron($c) {
     global $CRON_FILE;
+    // Zeile 1 (optional): Backup-Zeitplan. Zeile 2 (IMMER): heal.sh - die
+    // Selbstheilung der PLG-Registration (identisch zu install.sh; beide
+    // schreiben dieselbe Datei, sonst verschwindet der Heal beim Config-Speichern).
+    $body = '';
     if (!empty($c['schedule_enabled']) && preg_match('/^[\d*\/, -]+ [\d*\/, -]+ [\d*\/, -]+ [\d*\/, -]+ [\d*\/, -]+$/', trim($c['schedule_cron']))) {
-        $line = trim($c['schedule_cron'])." root nice -n 10 /usr/local/emhttp/plugins/arraybackup/include/engine.sh >> /boot/config/plugins/arraybackup/logs/cron.log 2>&1\n";
-        file_put_contents($CRON_FILE, $line);
-    } else {
-        @unlink($CRON_FILE);
+        $body = trim($c['schedule_cron'])." root nice -n 10 /usr/local/emhttp/plugins/arraybackup/include/engine.sh >> /boot/config/plugins/arraybackup/logs/cron.log 2>&1\n";
     }
+    $body .= "*/30 * * * * root /boot/config/plugins/arraybackup/heal.sh >/dev/null 2>&1\n";
+    file_put_contents($CRON_FILE, $body);
     // Crontab aus allen Flash-.cron-Dateien neu bauen (dynamix-Mechanismus,
     // ueberlebt Reboots; /etc/cron.d selbst ist fluechtiges tmpfs)
     @exec('/usr/local/sbin/update_cron 2>/dev/null');

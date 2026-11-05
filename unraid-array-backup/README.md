@@ -59,6 +59,24 @@ can be rebuilt from the data disks).
 > boot and may fail again. Also remove an old
 > `/boot/config/plugins/arraybackup.plg` before installing the new one.
 
+### Self-heal: plugin entry gone from the Plugins tab
+
+If `/boot/config/plugins/arraybackup.plg` (the registration file on flash) is
+ever lost – e.g. by a manual remove or delete – the plugin is no longer managed
+(Plugins tab shows nothing, no update check; after a reboot the tmpfs payload
+would be gone as well). Since version 2026.11.05.007 the plugin repairs that
+itself: `heal.sh` (installed by `install.sh`, run every 30 min from the cron
+file) re-fetches the PLG from the raw URL and, when the registration returns
+but the tmpfs payload is missing, runs `plugin install` again. Config and
+cron file live on flash and survive such a loss.
+
+If even the cron heal is not yet active (older version), recover manually –
+one command on the server console:
+
+```
+plugin install https://raw.githubusercontent.com/godghost123/back/main/unraid-array-backup/arraybackup.plg
+```
+
 Local install (no GitHub repo):
 
 1. Copy `arraybackup.plg` to the USB flash stick, e.g.
