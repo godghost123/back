@@ -395,15 +395,16 @@ ls /boot/config/plugins-error/
 grep -H '^Menu=' /usr/local/emhttp/plugins/*/*.page | sort | uniq -c | sort -rn
 ```
 
-Ergebnis-Logik:
-- `head -3` zeigt `Menu="user"` → neue Version ist installiert, aber der
-  Key passt nicht zu dieser unRAID-Version; die korrekte Schreibweise
-  liefert der letzte Befehl (Mehrheitswert der funktionierenden Kacheln,
-  z. B. `Menu="user"` vs. `Menu="Settings"`). Dann `.page`-Header +
-  `launch` im PLG anpassen und PLG neu bauen.
-- `head -3` zeigt `Menu="Settings:7"` → die **neue PLG wurde nicht
-  installiert** (Flash-Kopie alt, oder `plugins-error/`-Leiche installiert
-  die Alte). Dann Plugin entfernen, `plugins-error` leeren, neu installieren.
+**Ergebnis (Diagnose on server, resolved):**
+- `version="2026.11.05.004"` → the new PLG was installed; the missing
+  tile was not an install problem.
+- Grid-Key on this unRAID-Version: **`Menu="Utilities"`** (user.scripts,
+  unbalanced, nvidia-driver, vmbackup, tips.and.tweaks all spell it so;
+  `Menu="user"` is unknown → no tile). Fixed: `.page` Header `Menu="Utilities"`,
+  `Icon="hard-disk.png"`, PLG `launch="Utilities/ArrayBackup"`, version 005.
+- `images/` empty despite a `Type="base64"` FILE entry: the manager does
+  not create parent dirs. Fixed: PNG written by a `Run` script (`mkdir -p`
+  + `base64 -d` over the raw bytes, CR kept; roundtrip byte-identical).
 
 **Icon-Integration (der abgelegte `src/include/hard-disk.png`):**
 

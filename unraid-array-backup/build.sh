@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.05.004}"
+VERSION="${VERSION:-2026.11.05.005}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -42,7 +42,7 @@ cat <<EOF
   pluginURL="https://raw.githubusercontent.com/${OWNER}/${REPO}/main/${PLG_PATH}"
   support="https://github.com/${OWNER}/${REPO}/issues"
   project="https://github.com/${OWNER}/${REPO}"
-  launch="user/ArrayBackup"
+  launch="Utilities/ArrayBackup"
   icon="disk"
   min="6.10.0">
 
@@ -96,8 +96,10 @@ EOF
 #     (so wie es /usr/local/emhttp/plugins/dynamix.plugin.manager/scripts/plugin
 #     erwartet). install.sh erhaelt zusaetzlich Run="/bin/bash", laeuft also
 #     bei Installation/Update/Boot (Cron re-instashen auf dem Flash-Overlay).
-#     ArrayBackup.page registriert sich ueber seinen .page-Header (Menu="user")
-#     in den "User Utilities"-Raster der WebUI; launch accordingly. ---
+#     ArrayBackup.page registriert sich ueber seinen .page-Header (Menu="Utilities"
+#     - proven on the server: user.scripts/unbalanced/nvidia-driver/vmbackup use
+#     exactly this spelling for the "User Utilities" grid; "user" does NOT work)
+#     in the "User Utilities"-Raster; launch accordingly. ---
 for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/install.sh; do
   if [ "$f" = "src/install.sh" ]; then
     dest="/boot/config/plugins/arraybackup/install.sh"; mode="0755"; run=" Run=\"/bin/bash\""
@@ -117,17 +119,21 @@ for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/ins
   echo ""
 done
 
-# --- Icon (.page-Header Icon="hard-disk" -> images/hard-disk.png) ---
-# WICHTIG: BINAE Daten! Das b64()/sha() Oben stript CR (tr -d '\r') - fuer
-# Text-Payloads correct, aber ein PNG contains legitimes 0x0D-Bytes: stript
-# hem ware brger (PNG-chunk-checksums don't care, but a CR-stripped PNG is
-# malformed in general). Therefore encode/hash the ROH bytes here. The base64
-# output itself never contains CR, so the PLG stays CRLF-free as such.
-echo "<FILE Name=\"/usr/local/emhttp/plugins/arraybackup/images/hard-disk.png\" Type=\"base64\" Mode=\"0644\">"
-echo "<INLINE>"
-base64 src/include/hard-disk.png | tr -d '\n'
-echo "</INLINE>"
-echo "<SHA256>$(sha256sum src/include/hard-disk.png | cut -d' ' -f1)</SHA256>"
+# --- Icon: written by a Run script, NOT as a plain FILE element ---
+# Two proven server-side facts: (1) a FILE element under images/ was NOT
+# written (the plugin manager does not mkdir parents - the empty images/
+# dir came from a later Run block), so the tile had no icon. (2) Run blocks
+# with empty Name execute at install/boot. Hence the script itself does
+# mkdir -p and decodes the base64 of the RAW PNG (no tr -d '\r' - CR bytes
+# inside PNG data are legitimes and must be kept).
+echo "<FILE Run=\"/bin/bash\">"
+echo "<INLINE><![CDATA["
+echo "mkdir -p /usr/local/emhttp/plugins/arraybackup/images"
+echo "base64 -d >/usr/local/emhttp/plugins/arraybackup/images/hard-disk.png <<'PNGEOF'"
+base64 src/include/hard-disk.png | tr -d '\n' | fold -w 76
+echo "PNGEOF"
+echo "true"
+echo "]]></INLINE>"
 echo "</FILE>"
 echo ""
 

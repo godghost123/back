@@ -1,8 +1,8 @@
-Menu="user"
+Menu="Utilities"
 Title="ArrayBackup"
 Markdown="false"
 Tag="hdd"
-Icon="hard-disk"
+Icon="hard-disk.png"
 ---
 <?php
 // CSRF-Token der Session (emhttp/post-Check: POSTs ohne gueltigen csrf_token
