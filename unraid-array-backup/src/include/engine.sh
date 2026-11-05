@@ -620,7 +620,11 @@ run_backup() {
   for d in "${SOURCES[@]}"; do
     name=$(sanitize_token "$(basename "$d")")
     dest="$stage_root/fs"
-    args=(-aHAX --numeric-ids --stats --info=progress2 --partial-dir=.rsync-partial -f 'R .rsync-partial/')
+    # per-source partial-dir: all jobs share the SAME fs/ tree now, so two
+    # jobs must never write the same .rsync-partial temp file. The name is
+    # derived deterministically from the mount (sanitized), so a resumed run
+    # finds its own partials again; the sweep and the cleanup pattern '.rsync-partial*' cover them.
+    args=(-aHAX --numeric-ids --stats --info=progress2 --partial-dir=".rsync-partial-$name" -f 'R .rsync-partial-*/')
     if [ -n "$latest_abs" ] && [ -d "$latest_abs/fs" ]; then
       args+=(--link-dest="$latest_abs/fs")
     fi
