@@ -13,10 +13,11 @@ can be rebuilt from the data disks).
 
 - **Parallel reads, aggregated writes:** all data disks are read at the same
   time; the write streams saturate the RAID0 target
-- **Array snapshots:** each run looks like a full copy of the array
-  (`runs/<timestamp>/disk1 … diskN`)
-- **Disk history:** per-disk chronological chain
-  (`perdisk/diskN/<timestamp>` as symlinks)
+- **Array snapshots:** each run looks like a full copy of the array — one
+  shared tree `runs/<timestamp>/fs/` holding all disks AND pools
+- **Restore from the browser:** any file or folder of a snapshot back to
+  `/mnt/user/<share>` or to a test folder of your choice; asynchronous rsync
+  job with progress + stop, never `--delete` (additive only)
 - **Space-efficient:** unchanged files are hard links into the previous run
 - **Atomic promotion:** unfinished runs live in a hidden `.ab-staging/` area on
   the target; only a completed run is renamed (same filesystem, atomic) into
@@ -33,9 +34,10 @@ can be rebuilt from the data disks).
   validated before writing)
 - **Retention:** keeps the last N runs, enforces a minimum free space guard,
   individual runs can be pinned
-- **WebUI** under Settings: live progress per disk, snapshot table, paged array
-  browser (500 entries + "load more"), disk history, configuration. All labels
-  come from a single string table (`de`/`en`) in `ArrayBackup.page`
+- **WebUI** under User Utilities: live progress per source, snapshot table,
+  paged array browser (500 entries + "load more") with a Restore button per
+  entry, configuration. All labels come from a single string table
+  (`de`/`en`) in `ArrayBackup.page`
 - **Scheduler:** cron entry on flash
   (`/boot/config/plugins/arraybackup/arraybackup.cron`), re-activated via
   `update_cron` on every boot
@@ -139,24 +141,22 @@ does not parse or any base64/SHA256 mismatches.
 │   │   ├── .pinned             # only when the run is pinned
 │   │   └── fs/                 # merged view: disks AND pools in one tree
 │   └── r-20261101-…/disk1/…    # legacy runs (old per-disk layout) stay
-├── latest -> runs/r-…          # last successful run
-├── perdisk/
-│   └── disk1/r-… -> ../../runs/r-…/fs               # source history
-└── pershare/
-    └── appdata/r-… -> ../../runs/r-…/fs/appdata     # per-share history
+└── latest -> runs/r-…          # last successful run
 ```
+
+Older versions also created `perdisk/<disk>/<run>` and `pershare/<share>/<run>`
+symlink views for the (now removed) "Disk history" tab. Since
+2026.11.06.005 they are not created anymore and the engine deletes the two
+link roots once per run — they contained symlinks only, `runs/` is never
+touched by that cleanup.
 
 Because every source writes into the same `fs/` subtree, the path of a file in
 the backup does not depend on which mount it came from: a file the mover moved
 (cache → array) between two runs keeps its path and is hard-linked via the one
 shared `--link-dest` instead of being transferred again. Promotion is: stage in
 `.ab-staging/` → transfers → orphan-sweep → write `.runmeta.json` → same-FS
-`mv` into `runs/` → flip `latest`/`perdisk`/`pershare` symlinks → prune. If the
-`mv` fails, the run is marked failed and nothing in `runs/` changes.
-
-Promotion is: stage in `.ab-staging/` → copy → write `.runmeta.json` →
-same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
-`mv` fails, the run is marked failed and nothing in `runs/` changes.
+`mv` into `runs/` → flip the `latest` symlink → prune. If the `mv` fails, the
+run is marked failed and nothing in `runs/` changes.
 
 ## How it works
 
@@ -186,11 +186,27 @@ same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
 5. Transient rsync errors (10/11/12/30) retry up to 3 times with backoff;
    exit 24 (vanished source files) counts as success; fatal codes abort.
 6. On success: `.runmeta.json` written, run atomically renamed into `runs/`,
-   `latest`/`perdisk/`/`pershare/` updated, retention applied (count + free-space
+   `latest` updated, retention applied (count + free-space
    guard, pinned runs kept).
 7. Live progress lives in `/var/run/arraybackup/status.json` (RAM); run
    summaries in `/boot/config/plugins/arraybackup/logs/` (flash-friendly,
    rotated at 1 MB).
+
+## Restore (browser → disk)
+
+`restore-start` in the API launches `restore.sh` with `nohup` (parameters via
+environment, never `$argv`), so a big tree never blocks emhttp:
+
+- source: `runs/<id>/fs/<path>` — validated (strict run id, no traversal, meta
+  and dot-entries rejected)
+- target: the original share `/mnt/user/<share>` (dropdown, read live from
+  `runs/<id>/fs`) or a custom path such as `/mnt/user/restore-test/games` —
+  system paths, the backup target itself and parents of it are refused
+- mode: overwrite (default) or skip existing (`rsync --ignore-existing`)
+- **never** `--delete`: a restore only adds/replaces, existing files at the
+  target survive unless overwritten deliberately
+- progress card every 2 s from `/var/run/arraybackup/restore.json`, Stop via
+  `restore.stop.flag`; a restore and a backup run exclude each other
 
 ## Test plan
 
@@ -209,8 +225,14 @@ same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
 | Resume | start again after abort | staged run continues, already-copied files skipped (fast start, small delta) |
 | Resume off | disable "resume", start | staged leftovers are dropped, a fresh run begins |
 | Double start | start during a run | second engine exits immediately with the lock message |
-| Retention | `retention_runs=3`, 5 runs, pin one | exactly 3 unpinned kept, pinned survives, `latest`/`perdisk` consistent |
+| Retention | `retention_runs=3`, 5 runs, pin one | exactly 3 unpinned kept, pinned survives, `latest` consistent |
 | Self-backup | point target at `/mnt/disk1` | save is rejected in the WebUI; the engine also refuses |
+| Restore file | browser → Restore on one file → `/mnt/user/<share>` | file lands back in the share, banner "Restore fertig", no `--delete` side effects |
+| Restore folder, safe first | Restore a whole share into `/mnt/user/restore-test/…` | tree appears under the test folder; original share untouched |
+| Restore skip | restore over an existing modified file with mode "skip" | existing file keeps its content |
+| Restore guards | target = backup target / `/mnt/user` parent of target / `.runmeta.json` | each refused with a clear error, no job started |
+| Restore vs backup | start restore, then press "Backup starten" | refused ("a restore is running"), and vice versa |
+| Legacy link roots | old install still has `perdisk/`/`pershare/` | next engine run removes both roots, `runs/`+`latest` intact |
 
 ## Files
 
@@ -219,11 +241,12 @@ same-FS `mv` into `runs/` → flip `latest`/`perdisk` symlinks → prune. If the
 | `arraybackup.plg` | finished plugin manifest (generated, checked in – it is what `pluginURL` serves) |
 | `build.sh` | generates the `.plg` from `src/` and runs the validator as a gate |
 | `tools/validate_plg.py` | verifies the PLG: XML parses, base64 decodes, SHA256 matches, no CRLF/BOM |
-| `src/ArrayBackup.page` | WebUI with `.page` header (`Menu="Utilities"` → the icon grid "User Utilities" (spelling proven on server), `Icon="hard-disk.png"`); tabs: Backups, Array browser, Disk history, Configuration; single de/en string table |
+| `src/ArrayBackup.page` | WebUI with `.page` header (`Menu="Utilities"` → the icon grid "User Utilities" (spelling proven on server), `Icon="hard-disk.png"`); tabs: Backups, Array browser (with Restore), Configuration; single de/en string table |
 | `src/include/hard-disk.png` | plugin icon for the User-Utilities tile, embedded base64 over its raw bytes (`.gitattributes`: `*.png -text`) |
 | `src/install.sh` | post-install script (directories, default config, cron on flash) |
-| `src/include/ajax.php` | JSON API (`config-get/-save`, `start`, `stop`, `status`, `runs`, `ls` [paged], `pin`, `delete-run`) |
+| `src/include/ajax.php` | JSON API (`config-get/-save`, `start`, `stop`, `status`, `runs`, `ls` [paged], `pin`, `delete-run`, `restore-start/-status/-stop`, `shares-list`) |
 | `src/include/engine.sh` | backup engine (parallel rsync, staging + atomic promotion, retries, retention, log rotation) |
+| `src/include/restore.sh` | asynchronous restore job (rsync from a snapshot, progress/stop files, same JSON writer as the engine) |
 
 ## Known limits / future ideas
 

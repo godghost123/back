@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.06.004}"
+VERSION="${VERSION:-2026.11.06.005}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -24,7 +24,7 @@ sha() { tr -d '\r' < "$1" | sha256sum | cut -d' ' -f1; }
 
 # Guard: Sources sollten im Checkout LF sein (.gitattributes regelt das; dieser
 # Check faengt Abweichungen ab, bevor ein PLG mit doppelten CRs gebaut wird).
-for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/install.sh; do
+for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/include/restore.sh src/install.sh; do
   grep -q $'\r' "$f" && echo "WARN: $f enthaelt CRLF (core.autocrlf?) - baue trotzdem CR-frei" >&2
 done || true
 
@@ -60,6 +60,22 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- New: restore from the Array browser. Every entry (file or directory) has a
+  "Restore" button. The target is selectable: the original share under
+  /mnt/user/SHARE (offered as a dropdown, read directly from the run's fs/
+  tree) or a custom folder (e.g. /mnt/user/restore-test/games) so a restore
+  can be tested risk-free before writing back to the array. Mode: overwrite
+  or skip existing (rsync --ignore-existing). Runs async through restore.sh
+  (nohup + rsync, progress card with Stop, same 2 s status mechanism as the
+  backup engine) so emhttp never blocks on big trees. Guards: never inside
+  the backup target or a parent of it, never system paths, never
+  meta/dotfiles, strict run id; restore and backup exclude each other. rsync
+  NEVER uses --delete for restores (additive only).
+- Removed: the "Disk history" tab and the perdisk/ + pershare/ symlink views -
+  with the merged fs/ layout they only duplicated the run's fs/ tree and the
+  tab showed the exact same content as the Array browser. The engine no
+  longer creates those link roots and removes leftovers of older installs
+  once per run; delete-run still unlinks legacy symlinks.
 - Fix: the scheduled backup never ran - cron.log showed only "root: command
   not found". Unraid builds /etc/cron.d/root from the plugins' .cron files and
   reads those entries as a PLAIN crontab (update_cron's own lines have no user
@@ -182,7 +198,7 @@ EOF
 #     - proven on the server: user.scripts/unbalanced/nvidia-driver/vmbackup use
 #     exactly this spelling for the "User Utilities" grid; "user" does NOT work)
 #     in the "User Utilities"-Raster; launch accordingly. ---
-for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/install.sh; do
+for f in src/ArrayBackup.page src/include/ajax.php src/include/engine.sh src/include/restore.sh src/install.sh; do
   if [ "$f" = "src/install.sh" ]; then
     dest="/boot/config/plugins/arraybackup/install.sh"; mode="0755"; run=" Run=\"/bin/bash\""
   else

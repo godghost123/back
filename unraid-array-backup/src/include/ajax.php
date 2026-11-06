@@ -1,7 +1,8 @@
 <?php
 /* arraybackup - ajax.php
  * JSON-API fuer WebUI und Scheduler:
- *   action=config-get | config-save | start | stop | status | runs | ls | pin | delete-run
+ *   action=config-get | config-save | start | stop | status | runs | ls | pin
+ *   | delete-run | restore-start | restore-status | restore-stop | shares-list
  */
 
 $PLUGIN    = 'arraybackup';
@@ -12,6 +13,11 @@ $STATUS    = "$RUN_DIR/status.json";
 $STOP_FLAG = "$RUN_DIR/stop.flag";
 $ENGINE    = "/usr/local/emhttp/plugins/$PLUGIN/include/engine.sh";
 $CRON_FILE = "$CONF_DIR/$PLUGIN.cron";
+// async restore (restore.sh): own pid/status/stop files so a restore never
+// collides with the backup engine's files
+$RESTORE       = "/usr/local/emhttp/plugins/$PLUGIN/include/restore.sh";
+$RESTORE_STAT  = "$RUN_DIR/restore.json";
+$RESTORE_STOP  = "$RUN_DIR/restore.stop.flag";
 
 function jout($data) {
     header('Content-Type: application/json');
@@ -75,6 +81,39 @@ function engine_running() {
     // process is actually our engine (cmdline contains engine.sh)
     $cmd = @file_get_contents("/proc/$pid/cmdline");
     return $cmd !== false && strpos($cmd, 'engine.sh') !== false;
+}
+
+function restore_running() {
+    global $RUN_DIR;
+    $pid = (int)trim((string)@file_get_contents("$RUN_DIR/restore.pid"));
+    if ($pid <= 0 || !is_dir("/proc/$pid")) return false;
+    $cmd = @file_get_contents("/proc/$pid/cmdline");
+    return $cmd !== false && strpos($cmd, 'restore.sh') !== false;
+}
+
+// Restore-target guard. The operator picks where a file/folder goes back to
+// (/mnt/user/<...> for the original share, or a test folder). Refuse paths
+// that could hurt the system or the backup chain itself:
+//  - relative paths and / itself
+//  - system directories (/boot holds flash+config, /etc,/usr,/var,... rwired)
+//  - inside the backup target (restoring a snapshot into the snapshot chain)
+//  - INTO a parent of the target (would drop files next to runs/)
+// returns an error string or false when ok.
+function restore_dest_error($dest, $targetRoot) {
+    $dest = rtrim(str_replace('\\', '/', trim((string)$dest)), '/');
+    if ($dest === '' || $dest[0] !== '/' || $dest === '/') {
+        return 'restore target must be an absolute path (e.g. /mnt/user/games)';
+    }
+    if (preg_match('#^/(boot|etc|usr|var|sys|proc|dev|root|lib|bin|sbin)(/|$)#', $dest)) {
+        return 'refusing to restore into a system path: '.$dest;
+    }
+    if ($dest === $targetRoot || strpos($dest, $targetRoot.'/') === 0) {
+        return 'refusing to restore inside the backup target itself: '.$dest;
+    }
+    if (strpos($targetRoot, $dest.'/') === 0) {
+        return 'refusing to restore into a parent of the backup target (mixes restored data with the snapshot chain): '.$dest;
+    }
+    return false;
 }
 
 function safe_target_path($c, $rel) {
@@ -143,6 +182,8 @@ case 'config-save':
 
 case 'start':
     if (engine_running()) jerr('a backup is already running');
+    // hardlinking a still-restored tree would snapshot half-restored state
+    if (restore_running()) jerr('a restore is running - wait for it to finish');
     if (!is_file($ENGINE)) jerr('engine.sh not found');
     @mkdir("$CONF_DIR/logs", 0777, true);
     $cmd = 'nohup bash '.$ENGINE.' >> '.$CONF_DIR.'/logs/engine.log 2>&1 &';
@@ -225,9 +266,12 @@ case 'delete-run':
     $target = rtrim($c['target'], '/');
     $d = "$target/runs/$id";
     if (!is_dir($d)) jerr('run not found');
-    if (engine_running()) jerr('cannot delete while a backup is running');
+    if (engine_running() || restore_running()) jerr('cannot delete while a backup or restore is running');
     $isLatest = (realpath("$target/latest") === realpath($d));
     exec('rm -rf '.escapeshellarg($d));
+    // legacy perdisk//pershare symlinks of older
+    // versions - these link roots are not created anymore, but leftovers
+    // from previous installs still have to go when their run dies.
     foreach (glob("$target/perdisk/*/$id") ?: [] as $link) @unlink($link);
     foreach (glob("$target/pershare/*/$id") ?: [] as $link) @unlink($link);
     if ($isLatest) {
@@ -242,6 +286,74 @@ case 'delete-run':
             }
         }
     }
+    jout(['ok' => true]);
+
+case 'shares-list':
+    // Top-level shares of one run (for the restore target dropdown). Reads the
+    // run's own fs/ tree directly - the old pershare/ symlink view is gone.
+    $id = (string)($_POST['run'] ?? $_GET['run'] ?? '');
+    if (!preg_match('/^r-\d{8}-\d{6}$/', $id)) jerr('invalid run id');
+    $runDir = rtrim($c['target'], '/').'/runs/'.$id;
+    if (!is_dir($runDir)) jerr('run not found');
+    $root = is_dir("$runDir/fs") ? "$runDir/fs" : $runDir;
+    $names = array_values(array_filter(scandir($root) ?: [],
+        fn($e) => $e !== '.' && $e !== '..' && $e[0] !== '.' && is_dir("$root/$e")));
+    sort($names, SORT_NATURAL);
+    jout(['ok' => true, 'entries' => array_map(fn($n) => ['name' => $n], $names)]);
+
+case 'restore-start':
+    // Everything runs through restore.sh (nohup, env vars NOT $argv - see the
+    // register_argc_argv lesson in engine.sh). Guarded exactly like the engine:
+    // strict run id, no traversal, no meta entries, target outside the chain.
+    $id = (string)($_POST['run'] ?? '');
+    if (!preg_match('/^r-\d{8}-\d{6}$/', $id)) jerr('invalid run id');
+    if (engine_running()) jerr('a backup is running - restore is disabled during a backup');
+    if (restore_running()) jerr('a restore is already running');
+    $targetRoot = realpath($c['target']);
+    if ($targetRoot === false) jerr('backup target not mounted: '.$c['target']);
+    $rel = ltrim(str_replace('\\', '/', trim((string)($_POST['src'] ?? ''))), '/');
+    $base = 'runs/'.$id;
+    if (strpos($rel, $base.'/') !== 0 || strlen($rel) <= strlen($base) + 1) {
+        jerr('restore source must be inside the selected run');
+    }
+    foreach (explode('/', substr($rel, strlen($base) + 1)) as $seg) {
+        // .runmeta.json / .pinned / .ab-staging / dotfiles are plugin meta, not user data
+        if ($seg === '' || $seg[0] === '.') jerr('meta or hidden entries cannot be restored: '.$seg);
+    }
+    $src = safe_target_path($c, $rel);
+    if ($src === false || (!is_file($src) && !is_dir($src))) jerr('restore source not found: '.$rel);
+    $dest = (string)($_POST['dest'] ?? '');
+    $err = restore_dest_error($dest, $targetRoot);
+    if ($err !== false) jerr($err);
+    $dest = rtrim(str_replace('\\', '/', trim($dest)), '/');
+    $mode = (($_POST['mode'] ?? '') === 'skip') ? 'skip' : 'overwrite';
+    if (!is_file($RESTORE)) jerr('restore.sh not found');
+    @mkdir($RUN_DIR, 0777, true);
+    @mkdir("$CONF_DIR/logs", 0777, true);
+    // placeholder status so the WebUI shows a live card immediately (restore.sh
+    // rewrites it with real values within seconds)
+    @file_put_contents($RESTORE_STAT, json_encode([
+        'state' => 'running', 'run_id' => $id, 'updated' => date('Y-m-d H:i:s'),
+        'elapsed' => 0, 'label' => $rel, 'dest' => $dest, 'mode' => $mode,
+        'progress' => ['pct' => '', 'rate' => '', 'eta' => ''],
+    ]));
+    $cmd = 'nohup env AB_SRC='.escapeshellarg($src).' AB_DEST='.escapeshellarg($dest)
+         .' AB_MODE='.$mode.' AB_RID='.$id.' AB_LABEL='.escapeshellarg($rel)
+         .' bash '.escapeshellarg($RESTORE).' >> '.$CONF_DIR.'/logs/restore.log 2>&1 &';
+    exec($cmd);
+    jout(['ok' => true, 'dest' => $dest]);
+
+case 'restore-status':
+    $s = is_file($RESTORE_STAT) ? (json_decode(file_get_contents($RESTORE_STAT), true) ?: []) : [];
+    $s['running'] = restore_running();
+    // kill -9 / power loss leaves "running" forever - report the truth instead
+    if (!$s['running'] && ($s['state'] ?? '') === 'running') $s['state'] = 'lost';
+    jout(['ok' => true, 'restore' => $s]);
+
+case 'restore-stop':
+    if (!restore_running()) jerr('no restore running');
+    @mkdir($RUN_DIR, 0777, true);
+    file_put_contents($RESTORE_STOP, (string)time());
     jout(['ok' => true]);
 
 default:

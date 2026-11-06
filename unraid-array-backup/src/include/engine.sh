@@ -335,11 +335,26 @@ stop_all() {
 # they grow unboundedly (every cron tick appends). Keep the newest ~1 MB.
 rotate_logs() {
   local f
-  for f in "$LOG_DIR/engine.log" "$LOG_DIR/cron.log" "$LOG_DIR/history.log"; do
+  for f in "$LOG_DIR/engine.log" "$LOG_DIR/cron.log" "$LOG_DIR/history.log" "$LOG_DIR/restore.log"; do
     [ -f "$f" ] || continue
     if [ "$(stat -c%s -- "$f" 2>/dev/null || wc -c <"$f")" -gt 1048576 ]; then
       tail -c 524288 -- "$f" >"$f.1" 2>/dev/null && mv -f -- "$f.1" "$f"
       log "rotated $(basename "$f") (kept newest 512 KB)"
+    fi
+  done
+}
+
+# perdisk/ and pershare/ were symlink views for the removed "Disk history" tab.
+# With the merged fs/ layout they only duplicate runs/<id>/fs, and nothing in
+# the WebUI reads them anymore. Remove the roots once per run so the target
+# listing stays clean: these dirs contain symlinks only (rm -rf does NOT follow
+# them), runs/ and latest are untouched.
+remove_legacy_link_roots() {
+  local d
+  for d in "$CFG_TARGET/perdisk" "$CFG_TARGET/pershare"; do
+    [ -e "$d" ] || continue
+    if rm -rf -- "$d"; then
+      log "removed legacy link view: $d"
     fi
   done
 }
@@ -941,18 +956,10 @@ run_backup() {
       die "could not move staged run $RUN_ID into runs/ (disk full, permissions, or target not one filesystem?)"
     fi
     ln -sfn "runs/$RUN_ID" "$CFG_TARGET/latest"
-    # perdisk still links to the shared fs tree (Disk-Historie stays browsable;
-    # legacy runs keep their own diskN dirs, Kap. 10.6 "only migration")
-    for d in "${SOURCES[@]}"; do
-      name=$(sanitize_token "$(basename "$d")")
-      mkdir -p "$CFG_TARGET/perdisk/$name"
-      ln -sfn "../../runs/$RUN_ID/fs" "$CFG_TARGET/perdisk/$name/$RUN_ID"
-    done
-    # pershare: one symlink chain per covered share (restore view per share)
-    for name in ${SHARES[@]+"${SHARES[@]}"}; do
-      mkdir -p "$CFG_TARGET/pershare/$name"
-      ln -sfn "../../runs/$RUN_ID/fs/$name" "$CFG_TARGET/pershare/$name/$RUN_ID"
-    done
+    # perdisk//pershare symlink views are NOT created anymore: they
+    # duplicated runs/<id>/fs and the tab that consumed them ("Disk history")
+    # was removed. remove_legacy_link_roots() cleans leftovers of older
+    # installs at engine start.
     # drop any abandoned staged leftovers from previous crashed runs
     find -- "$stage_base" -mindepth 1 -maxdepth 1 -type d -name 'r-*' -exec rm -rf -- {} +
     prune
@@ -983,6 +990,7 @@ main() {
 
   load_config
   validate
+  remove_legacy_link_roots
   mark_stale_runs
   heal_run_meta
   run_backup

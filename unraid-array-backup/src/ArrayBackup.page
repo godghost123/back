@@ -62,7 +62,6 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   <div class="ab-tabs">
     <div class="ab-tab active" data-tab="backups" data-i18n="tab_backups"></div>
     <div class="ab-tab" data-tab="browser" data-i18n="tab_browser"></div>
-    <div class="ab-tab" data-tab="history" data-i18n="tab_history"></div>
     <div class="ab-tab" data-tab="config" data-i18n="tab_config"></div>
   </div>
 
@@ -90,19 +89,36 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         <span data-i18n="lbl_run"></span> <select id="ab-run-select" style="padding:6px"></select>
       </div>
       <div class="ab-crumbs" id="ab-crumb1"></div>
-      <table class="ab-table" id="ab-browse1"><thead><tr><th data-i18n="th_name"></th><th data-i18n="th_size2"></th><th data-i18n="th_modified"></th></tr></thead><tbody></tbody></table>
+      <table class="ab-table" id="ab-browse1"><thead><tr><th data-i18n="th_name"></th><th data-i18n="th_size2"></th><th data-i18n="th_modified"></th><th data-i18n="th_restore"></th></tr></thead><tbody></tbody></table>
     </div>
-  </div>
 
-  <div class="ab-panel" id="ab-panel-history">
-    <div class="ab-card">
-      <b data-i18n="perdisk_title"></b>
-      <div style="margin:8px 0">
-        <span data-i18n="lbl_disk"></span> <select id="ab-disk-select" style="padding:6px"></select>
-        <span data-i18n="lbl_snap"></span> <select id="ab-snap-select" style="padding:6px"></select>
+    <div class="ab-card" id="ab-restore-card" style="display:none">
+      <b data-i18n="restore_title"></b> <span id="ab-restore-label" class="ab-mono ab-muted"></span>
+      <div class="ab-bar"><div id="ab-restore-bar"></div><span id="ab-restore-pct"></span></div>
+      <div style="margin-top:6px">
+        <button class="ab-btn warn" id="ab-restore-stop">&#9632; <span data-i18n="restore_stop"></span></button>
       </div>
-      <div class="ab-crumbs" id="ab-crumb2"></div>
-      <table class="ab-table" id="ab-browse2"><thead><tr><th data-i18n="th_name"></th><th data-i18n="th_size2"></th><th data-i18n="th_modified"></th></tr></thead><tbody></tbody></table>
+    </div>
+
+    <div class="ab-card" id="ab-restore-dialog" style="display:none">
+      <b data-i18n="restore_dialog_title"></b>
+      <div class="ab-grid" style="margin-top:8px">
+        <label data-i18n="restore_src"></label><span id="rs-src" class="ab-mono ab-muted"></span>
+        <label data-i18n="restore_target"></label>
+        <div>
+          <select id="rs-target-select" style="width:100%;padding:6px;box-sizing:border-box"></select>
+          <input type="text" id="rs-target-custom" style="display:none;margin-top:4px" placeholder="/mnt/user/restore-test/games">
+        </div>
+        <label data-i18n="rs_dest_mode"></label>
+        <div>
+          <input type="radio" name="rs-mode" id="rs-mode-over" value="overwrite" checked><label data-i18n="rs_mode_over"></label>
+          &nbsp;&nbsp;<input type="radio" name="rs-mode" id="rs-mode-skip" value="skip"><label data-i18n="rs_mode_skip"></label>
+        </div>
+      </div>
+      <p class="ab-muted" data-i18n="restore_help"></p>
+      <button class="ab-btn" id="rs-start" data-i18n="restore_start"></button>
+      <button class="ab-btn ghost" id="rs-cancel" data-i18n="restore_cancel"></button>
+      <span id="rs-msg" class="ab-muted"></span>
     </div>
   </div>
 
@@ -164,7 +180,6 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       btn_stop:        'Stopp',
       tab_backups:     'Backups',
       tab_browser:     'Array-Browser',
-      tab_history:     'Disk-Historie',
       tab_config:      'Konfiguration',
       live_title:      'Laufender Backup',
       runs_title:      'Array-Snapshots',
@@ -179,10 +194,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       th_size2:        'Größe',
       th_modified:     'Geändert',
       full_title:      'Komplettsicherung ansehen',
-      perdisk_title:   'Sicherung pro Disk',
       lbl_run:         'Lauf:',
-      lbl_disk:        'Disk:',
-      lbl_snap:        'Snapshot:',
       cfg_target:      'Ziel (RAID0-Mountpoint)',
       cfg_retention:   'Anzahl behaltener Läufe',
       cfg_minfree:     'Mindest-Freiraum (GB)',
@@ -213,7 +225,26 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       pin:             'anheften',
       del_run:         'Löschen',
       confirm_del:     'Lauf {run} wirklich löschen?',
-      no_disk_history: 'Keine Disk-Historie vorhanden.',
+      th_restore:      'Aktion',
+      restore_btn:     'Wiederherstellen',
+      restore_no_run:  'Restore ist nur innerhalb eines Lauf-Snapshots moeglich.',
+      restore_dialog_title: 'Wiederherstellung',
+      restore_src:     'Quelle:',
+      restore_target:  'Ziel:',
+      rs_custom:       '-- eigener Zielordner --',
+      rs_dest_mode:    'Modus:',
+      rs_mode_over:    'ueberschreiben',
+      rs_mode_skip:    'vorhandene ueberspringen',
+      restore_start:   'Restore starten',
+      restore_cancel:  'Abbrechen',
+      restore_help:    'Ziel ist meist der urspruengliche Share unter /mnt/user/<name>. Fuer einen gefahrlosen Test erst in einen Ordner wie /mnt/user/restore-test restoren. Es wird NIE geloescht: "ueberschreiben" ersetzt gleichnamige Dateien, "ueberspringen" behaelt vorhandene.',
+      restore_title:   'Laufender Restore',
+      restore_stop:    'Restore stoppen',
+      restore_done:    'Restore fertig:',
+      restore_failed:  'Restore fehlgeschlagen:',
+      restore_aborted: 'Restore abgebrochen:',
+      restore_lost:    'Restore unterbrochen (Neustart?) - kein Restore laeuft mehr:',
+      restore_to:      '\u2192',
       load_more:       'Mehr laden',
       entries:         'Einträge',
       loading:         'lade…',
@@ -231,7 +262,6 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       btn_stop:        'Stop',
       tab_backups:     'Backups',
       tab_browser:     'Array browser',
-      tab_history:     'Disk history',
       tab_config:      'Configuration',
       live_title:      'Backup in progress',
       runs_title:      'Array snapshots',
@@ -246,10 +276,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       th_size2:        'Size',
       th_modified:     'Modified',
       full_title:      'Browse full snapshot',
-      perdisk_title:   'Per-disk backup',
       lbl_run:         'Run:',
-      lbl_disk:        'Disk:',
-      lbl_snap:        'Snapshot:',
       cfg_target:      'Target (RAID0 mountpoint)',
       cfg_retention:   'Runs to keep',
       cfg_minfree:     'Minimum free space (GB)',
@@ -280,7 +307,26 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       pin:             'pin',
       del_run:         'Delete',
       confirm_del:     'Really delete run {run}?',
-      no_disk_history: 'No disk history present.',
+      th_restore:      'Action',
+      restore_btn:     'Restore',
+      restore_no_run:  'Restore is only available inside a run snapshot.',
+      restore_dialog_title: 'Restore',
+      restore_src:     'Source:',
+      restore_target:  'Target:',
+      rs_custom:       '-- custom target folder --',
+      rs_dest_mode:    'Mode:',
+      rs_mode_over:    'overwrite',
+      rs_mode_skip:    'skip existing',
+      restore_start:   'Start restore',
+      restore_cancel:  'Cancel',
+      restore_help:    'The target is usually the original share under /mnt/user/<name>. To test safely, restore into a folder like /mnt/user/restore-test first. Nothing is ever deleted: "overwrite" replaces files with the same name, "skip" keeps existing ones.',
+      restore_title:   'Restore in progress',
+      restore_stop:    'Stop restore',
+      restore_done:    'Restore finished:',
+      restore_failed:  'Restore failed:',
+      restore_aborted: 'Restore aborted:',
+      restore_lost:    'Restore interrupted (reboot?) - no restore is running:',
+      restore_to:      '\u2192',
       load_more:       'Load more',
       entries:         'entries',
       loading:         'loading…',
@@ -344,7 +390,6 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       t.classList.add('active');
       $('ab-panel-' + t.dataset.tab).classList.add('active');
       if (t.dataset.tab === 'browser') loadRunOptions();
-      if (t.dataset.tab === 'history') loadDiskOptions();
     });
   });
 
@@ -510,12 +555,11 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     return { tbl: $(tblId), crumbs: $(crumbId), path: path, entries: [], done: 0, total: 0, truncated: false };
   }
   var view1 = browseState('ab-browse1', 'ab-crumb1', '');
-  var view2 = browseState('ab-browse2', 'ab-crumb2', '');
 
   function loadMore(view) {
     api('ls', { path: view.path, offset: view.done, limit: PAGE }, 'GET').then(function (res) {
       if (!res.ok) {
-        view.tbl.querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">' + esc(res.error || '') + '</td></tr>';
+        view.tbl.querySelector('tbody').innerHTML = '<tr><td colspan="4" class="ab-muted">' + esc(res.error || '') + '</td></tr>';
         return;
       }
       view.entries = view.entries.concat(res.entries || []);
@@ -523,8 +567,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       view.total = res.total;
       view.truncated = !!res.truncated;
       renderBrowse(view, function (name) {
-        var p = view.path ? view.path + '/' + name : name;
-        if (view === view1) browse1(p); else browse2(p);
+        browse1(view.path ? view.path + '/' + name : name);
       });
     });
   }
@@ -544,26 +587,28 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       var tr = document.createElement('tr');
       tr.innerHTML = '<td>' + (e.dir ? '&#128193; <a href="#" class="ab-dir">' + esc(e.name) + '/</a>' : '&#128196; ' + esc(e.name)) + '</td>' +
                      '<td>' + (e.dir ? '' : fmtBytes(e.size)) + '</td>' +
-                     '<td>' + new Date(e.mtime * 1000).toLocaleString() + '</td>';
+                     '<td>' + new Date(e.mtime * 1000).toLocaleString() + '</td>' +
+                     '<td><button class="ab-btn small ghost ab-restore-btn">' + esc(T('restore_btn')) + '</button></td>';
       if (e.dir) tr.querySelector('.ab-dir').addEventListener('click', function (ev) { ev.preventDefault(); onDir(e.name); });
+      tr.querySelector('.ab-restore-btn').addEventListener('click', function () { openRestore(view, e); });
       tb.appendChild(tr);
     });
     if (view.truncated) {
       var tr = document.createElement('tr');
-      tr.innerHTML = '<td colspan="3"><button class="ab-btn small ghost">' + esc(T('load_more')) + ' (' +
+      tr.innerHTML = '<td colspan="4"><button class="ab-btn small ghost">' + esc(T('load_more')) + ' (' +
                      (view.done) + ' / ' + view.total + ')</button></td>';
       tr.querySelector('button').addEventListener('click', function () { loadMore(view); });
       tb.appendChild(tr);
     } else if (view.total > 0) {
       var tr2 = document.createElement('tr');
-      tr2.innerHTML = '<td colspan="3" class="ab-muted">' + view.total + ' ' + esc(T('entries')) + '</td>';
+      tr2.innerHTML = '<td colspan="4" class="ab-muted">' + view.total + ' ' + esc(T('entries')) + '</td>';
       tb.appendChild(tr2);
     }
   }
   function resetAndLoad(view, path, browseFn) {
     view.path = path;
     view.entries = []; view.done = 0; view.total = 0; view.truncated = false;
-    view.tbl.querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">' + esc(T('loading')) + '</td></tr>';
+    view.tbl.querySelector('tbody').innerHTML = '<tr><td colspan="4" class="ab-muted">' + esc(T('loading')) + '</td></tr>';
     crumbs(view.crumbs, path, browseFn);
     loadMore(view);
   }
@@ -591,38 +636,112 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   $('ab-run-select').addEventListener('change', function () { resetAndLoad(view1, this.value, browse1); });
   function browse1(path) { resetAndLoad(view1, path, browse1); }
 
-  /* ---------- Disk-Historie ---------- */
-  function loadDiskOptions() {
-    api('ls', {path: 'perdisk', limit: 100}, 'GET').then(function (res) {
-      var sel = $('ab-disk-select');
-      sel.innerHTML = '';
-      ((res.ok ? res.entries : []) || []).filter(function (e) { return e.dir; }).forEach(function (e) {
-        var o = document.createElement('option');
-        o.value = e.name; o.textContent = e.name;
-        sel.appendChild(o);
-      });
-      if (sel.value) loadSnaps(sel.value);
-      else { $('ab-snap-select').innerHTML = ''; $('ab-browse2').querySelector('tbody').innerHTML = '<tr><td colspan="3" class="ab-muted">' + esc(T('no_disk_history')) + '</td></tr>'; }
-    });
+  /* ---------- Restore (asynchron, Backend: restore.sh) ---------- */
+  // ajax.php fuehrt restore.sh per nohup aus; hier wird nur alle 2 s
+  // restore.json gezeichnet. Guard gegen Gleichzeitigkeit (Backup laeuft)
+  // trifft das Server-Ende - die UI zeigt dann einfach die Fehlermeldung.
+  var restoreTimer = null, restoreLastKey = '';
+  function currentRunId(path) {
+    var m = /^runs\/(r-\d{8}-\d{6})(\/|$)/.exec(path || '');
+    return m ? m[1] : '';
   }
-  function loadSnaps(disk) {
-    api('ls', {path: 'perdisk/' + disk, limit: 100}, 'GET').then(function (res) {
-      var sel = $('ab-snap-select');
-      sel.innerHTML = '';
-      ((res.ok ? res.entries : []) || []).filter(function (e) { return e.dir; }).reverse().forEach(function (e) {
-        var o = document.createElement('option');
-        o.value = e.name; o.textContent = e.name;
-        sel.appendChild(o);
-      });
-      var p = sel.value ? 'perdisk/' + disk + '/' + sel.value : 'perdisk/' + disk;
-      resetAndLoad(view2, p, browse2);
-    });
+  function shareOfPath(p) {
+    var m = /^runs\/r-\d{8}-\d{6}\/fs\/([^/]+)/.exec(p || '');
+    return m ? m[1] : '';
   }
-  $('ab-disk-select').addEventListener('change', function () { loadSnaps(this.value); });
-  $('ab-snap-select').addEventListener('change', function () {
-    resetAndLoad(view2, 'perdisk/' + $('ab-disk-select').value + '/' + this.value, browse2);
+  function openRestore(view, entry) {
+    var src = view.path ? view.path + '/' + entry.name : entry.name;
+    if (!currentRunId(src)) { banner(T('restore_no_run'), 'err'); return; }
+    banner('', '');
+    $('rs-src').textContent = src;
+    $('rs-msg').textContent = '';
+    $('rs-target-custom').value = '';
+    var sel = $('rs-target-select');
+    sel.innerHTML = '';
+    var oc = document.createElement('option');
+    oc.value = '__custom__'; oc.textContent = T('rs_custom');
+    sel.appendChild(oc);
+    // Ziel-Vorschlag: Original-Share unter /mnt/user (Top-Level-Verzeichnis
+    // des Snapshot-Pfads). Die Liste stammt aus shares-list (direkt aus
+    // runs/<id>/fs gelesen, die pershare/-Symlink-Ansicht ist entfallen).
+    var want = '/mnt/user/' + shareOfPath(src);
+    api('shares-list', {run: currentRunId(src)}).then(function (res) {
+      var found = false;
+      ((res.ok && res.entries) || []).forEach(function (e) {
+        var o = document.createElement('option');
+        o.value = '/mnt/user/' + e.name;
+        o.textContent = o.value;
+        sel.appendChild(o);
+        if (o.value === want) found = true;
+      });
+      sel.value = found ? want : '__custom__';
+      toggleCustomTarget();
+    });
+    $('ab-restore-dialog').style.display = 'block';
+  }
+  function toggleCustomTarget() {
+    $('rs-target-custom').style.display = $('rs-target-select').value === '__custom__' ? 'block' : 'none';
+  }
+  $('rs-target-select').addEventListener('change', toggleCustomTarget);
+  $('rs-cancel').addEventListener('click', function () { $('ab-restore-dialog').style.display = 'none'; });
+  $('rs-start').addEventListener('click', function () {
+    var sel = $('rs-target-select');
+    var dest = sel.value === '__custom__' ? $('rs-target-custom').value.trim() : sel.value;
+    var src = $('rs-src').textContent;
+    var mode = $('rs-mode-skip').checked ? 'skip' : 'overwrite';
+    api('restore-start', {run: currentRunId(src), src: src, dest: dest, mode: mode}).then(function (res) {
+      if (!res.ok) { $('rs-msg').textContent = T('error_colon') + ' ' + res.error; return; }
+      $('ab-restore-dialog').style.display = 'none';
+      restoreLastKey = '';
+      startRestorePoll();
+      pollRestore();
+    });
   });
-  function browse2(path) { resetAndLoad(view2, path, browse2); }
+  $('ab-restore-stop').addEventListener('click', function () {
+    api('restore-stop').then(function (res) { if (!res.ok) banner(res.error, 'err'); });
+  });
+  function startRestorePoll() { if (!restoreTimer) restoreTimer = setInterval(pollRestore, 2000); }
+  function stopRestorePoll() { if (restoreTimer) { clearInterval(restoreTimer); restoreTimer = null; } }
+  function pollRestore() {
+    api('restore-status', {}, 'GET').then(function (res) {
+      if (!res.ok) return;
+      var r = res.restore || {};
+      var card = $('ab-restore-card');
+      var st = r.state || '';
+      if (st === 'running') {
+        card.style.display = 'block';
+        startRestorePoll();
+        var p = r.progress || {};
+        var pct = parseFloat(p.pct) || 0;
+        $('ab-restore-bar').style.width = Math.min(100, pct) + '%';
+        $('ab-restore-pct').textContent =
+          (pct ? pct + '%' : '') + (p.rate ? '  ' + p.rate : '') +
+          (p.eta ? '  ETA ' + p.eta : '') + (r.elapsed ? '  (' + fmtDur(r.elapsed) + ')' : '');
+        $('ab-restore-label').textContent =
+          (r.run_id || '') + ' \u00B7 ' + (r.label || '') + ' ' + T('restore_to') + ' ' + (r.dest || '');
+      } else if (st) {
+        card.style.display = 'none';
+        stopRestorePoll();
+        // Abschluss-Meldung genau EINMAL pro beendetem Restore (Kennung aus
+        // state+updated+dest) - ein Reload darf denselben Banner nicht ewig
+        // wiederkauen lassen.
+        var key = st + '|' + (r.updated || '') + '|' + (r.dest || '');
+        if (key !== restoreLastKey) {
+          restoreLastKey = key;
+          var label = ' ' + (r.label || '') + ' ' + T('restore_to') + ' ' + (r.dest || '');
+          if (st === 'success') banner(T('restore_done') + label, 'info');
+          else {
+            var pre = st === 'aborted' ? T('restore_aborted')
+                    : st === 'lost' ? T('restore_lost') : T('restore_failed');
+            banner(pre + label + (r.error ? ' (' + r.error + ')' : ''), 'err');
+          }
+        }
+      } else {
+        card.style.display = 'none';
+        stopRestorePoll();
+      }
+    });
+  }
 
   /* ---------- Config ---------- */
   function loadConfig() {
@@ -670,5 +789,8 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   loadRuns();
   pollStatus();
   pollTimer = setInterval(pollStatus, 2000);
+  // a restore that is still running (or ended while the page was closed)
+  // surfaces its card/banner right away
+  pollRestore();
 })();
 </script>
