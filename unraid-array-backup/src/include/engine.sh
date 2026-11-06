@@ -18,6 +18,12 @@ STATUS_FILE="${RUN_DIR}/status.json"
 STOP_FILE="${RUN_DIR}/stop.flag"
 PROG_DIR="${RUN_DIR}/progress"
 STATS_DIR="${RUN_DIR}/stats"
+# Last successfully parsed progress per source ("pct|rate|eta"). write_status
+# runs every 2 s: a retry resets the progress log and any newest line without
+# parseable tokens used to blank the values - the WebUI then showed
+# "0  0.0kB/s" as if the progress display was lost. Global: the cache must
+# persist across the write_status calls of one run.
+declare -A PROG_CACHE=()
 
 # Staging area for unfinished runs. Must live on the target filesystem so the
 # promotion to runs/ is a single atomic rename (see run_backup()).
@@ -126,28 +132,60 @@ write_json() {
 # json_decode(...) ?: [] then silently turned every failure into "no status".
 write_status() {
   local state="$1" run_id="$2" errmsg="${3:-}"
-  local now d name pct rate eta ex last diskjson=""
+  local now d name pct rate eta ex last cached done_json diskjson=""
   now=$(date '+%F %T')
   for d in ${SOURCES[@]+"${SOURCES[@]}"}; do
     name=$(sanitize_token "$(basename "$d")")
     # disk leaves are JSON-safe by construction; pool mount names got
     # normalized through sanitize_token (spaces/special chars -> _)
-    pct=""; rate=""; eta=""; ex=""
+    pct=""; rate=""; eta=""; ex=""; done_json=""
     if [ -f "$PROG_DIR/$name.log" ]; then
       # --info=progress2 changed layout between rsync versions (old:
       # "12.34% 123.45MB/s 0:10:23", rsync 3.2.3+: "185.869.340.868 81%
       # 1:00:38 77.80MB/s" plus locale digit grouping). Field positions are
       # not stable, so each value is located by token shape instead.
-      last=$(tr '\r' '\n' < "$PROG_DIR/$name.log" 2>/dev/null | grep -E '[0-9]+%([[:space:]]|$)' | tail -n1)
-      pct=$(printf '%s' "$last"  | grep -oE '[0-9]*\.?[0-9]+%' | head -n1 | tr -d '%')
+      # 0%-placeholders are SKIPPED: before the first file of a batch is
+      # opened, rsync repeatedly prints "0%  0.00kB/s  0:00:00" (also after
+      # each retry). Accepting those lines blanked a bar that had real values
+      # ("Fortschrittsanzeige nach einer Zeit weg: 0  0.00kB/s ETA 0:00:00").
+      # A line counts as real if it carries a NON-zero pct token (starts with
+      # 1-9, e.g. "4%" / "12.5%" / "100%") OR a non-zero rate ("48.13MB/s") -
+      # a genuinely slow source sitting at "0.4%" still has a real rate and
+      # must not be filtered out with the true placeholders.
+      last=$(tr '\r' '\n' < "$PROG_DIR/$name.log" 2>/dev/null | grep -E '[0-9]+%([[:space:]]|$)' | grep -E '([1-9][0-9]*([.,][0-9]+)?%|[1-9][0-9]*([.,][0-9]+)?[[:space:]]*(kB|MB|GB|TB|B)/s)' | tail -n1)
+      pct=$(printf '%s' "$last"  | grep -oE '[0-9]+([.,][0-9]+)?%' | head -n1 | tr -d '%' | tr ',' '.')
       rate=$(printf '%s' "$last" | grep -oE '[0-9]+([.,][0-9]+)?[[:space:]]*(kB|MB|GB|TB|B)/s' | head -n1)
       eta=$(printf '%s' "$last"  | grep -oE '[0-9]+:[0-9]{2}(:[0-9]{2})?' | head -n1)
+    fi
+    # Never blank a bar: if the newest line had no parseable tokens (retry
+    # reset the log, rsync between files, locale hickups), reuse the last
+    # values that parsed OK - a momentary parse gap is not "progress lost".
+    if [ -n "$pct$rate$eta" ]; then
+      PROG_CACHE[$name]="${pct}|${rate}|${eta}"
+    else
+      cached=${PROG_CACHE[$name]:-}
+      if [ -n "$cached" ]; then
+        pct=${cached%%|*}
+        rate=${cached#*|}; rate=${rate%%|*}
+        eta=${cached##*|}
+      fi
     fi
     if [ -f "$STATS_DIR/$name.exit" ]; then
       ex=$(cat "$STATS_DIR/$name.exit")
       case "$ex" in (*[!0-9]*|'') ex="" ;; esac   # digits only, else drop
     fi
-    diskjson="${diskjson}${diskjson:+,}\"${name}\":{\"pct\":\"${pct}\",\"rate\":\"${rate}\",\"eta\":\"${eta}\"${ex:+,\"exit\":${ex}}}"
+    # A FINISHED transfer freezes its progress line forever (and it usually
+    # is not 100 %, because --stats follows the last progress2 line). Old
+    # behaviour: completed disks kept showing a stale "4% ETA 0:03:41" that
+    # looked like a broken display. Report them as done (exit 0/24) or
+    # failed, and drop the meaningless rate/eta.
+    if [ -n "$ex" ]; then
+      rate=""; eta=""
+      if [ "$ex" = 0 ] || [ "$ex" = 24 ]; then
+        pct=100; done_json=",\"done\":true"
+      fi
+    fi
+    diskjson="${diskjson}${diskjson:+,}\"${name}\":{\"pct\":\"${pct}\",\"rate\":\"${rate}\",\"eta\":\"${eta}\"${ex:+,\"exit\":${ex}}${done_json}}"
   done
   # state/run_id and disk names are engine-generated tokens and the progress
   # values come from grep -oE patterns -> quote-free by construction. Only the
@@ -653,7 +691,10 @@ run_backup() {
     ( set +e
       try=0
       while :; do
-        rsync "${args[@]}" "$d/" "$dest/" >"$PROG_DIR/$name.log" 2>&1
+        # append (not truncate): a retry must not wipe the progress history -
+        # the log starts empty per engine run (main() clears PROG_DIR), and
+        # write_status always reads the LAST progress line anyway.
+        rsync "${args[@]}" "$d/" "$dest/" >>"$PROG_DIR/$name.log" 2>&1
         ec=$?
         [ "$ec" -eq 0 ] && break
         [ -f "$STOP_FILE" ] && break
@@ -715,7 +756,9 @@ run_backup() {
   for d in "${SOURCES[@]}"; do
     name=$(sanitize_token "$(basename "$d")")
     local delta
-    delta=$(awk '/^Total transferred file size:/{gsub(/,/,"",$5); print $5}' "$PROG_DIR/$name.log" 2>/dev/null || true)
+    # tail -n1: with retries the log can hold several --stats blocks; the
+    # final (last) one is authoritative
+    delta=$(awk '/^Total transferred file size:/{gsub(/,/,"",$5); print $5}' "$PROG_DIR/$name.log" 2>/dev/null | tail -n1 || true)
     [ -z "$delta" ] && delta=0
     total_delta=$((total_delta + delta))
     ec=$(cat "$STATS_DIR/$name.exit" 2>/dev/null || echo 1)

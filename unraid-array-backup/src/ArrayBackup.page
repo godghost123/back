@@ -139,6 +139,20 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
   var CSRF = '<?=htmlspecialchars($__ab_csrf, ENT_QUOTES)?>';
   var pollTimer = null, lastRunning = false;
   var runsCache = [];
+  // Last good progress per source (persisted in sessionStorage), so the bars
+  // survive a page reload/navigation AND momentary parse gaps in status.json.
+  // Keyed by run id: a new run must start with empty bars.
+  var PROG_KEY = 'arraybackup.progress';
+  function loadProgressCache() {
+    try { return JSON.parse(sessionStorage.getItem(PROG_KEY) || '{}'); }
+    catch (e) { return {}; }
+  }
+  function saveProgressCache(pc) {
+    try { sessionStorage.setItem(PROG_KEY, JSON.stringify(pc)); } catch (e) {}
+  }
+  function clearProgressCache() {
+    try { sessionStorage.removeItem(PROG_KEY); } catch (e) {}
+  }
 
   /* ---------- One string table for every label/message ---------- */
   // Single source of truth: the HTML carries data-i18n keys, the JS uses T().
@@ -205,7 +219,9 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       loading:         'lade…',
       root:            'root',
       saved:           'Gespeichert.',
-      error_colon:     'Fehler:'
+      error_colon:     'Fehler:',
+      src_done:        'fertig',
+      src_failed:      'fehlgeschlagen'
     },
     en: {
       btn_start:       'Start backup',
@@ -267,7 +283,9 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       loading:         'loading…',
       root:            'root',
       saved:           'Saved.',
-      error_colon:     'Error:'
+      error_colon:     'Error:',
+      src_done:        'done',
+      src_failed:      'failed'
     }
   };
   function T(key) { return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.de[key] || key; }
@@ -326,7 +344,7 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 
   /* ---------- Status / Live ---------- */
   function pollStatus() {
-    api('status', {}, 'GET').then(function (res) {
+    api('status', {}, 'GET').catch(function () { return {}; }).then(function (res) {
       if (!res.ok) return;
       var s = res.status || {};
       var running = !!s.engine_running;
@@ -335,18 +353,43 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         live.style.display = 'block';
         $('ab-live-id').textContent = s.run_id || '';
         $('ab-global').textContent = T('global_running') + (s.dry_run ? ' ' + T('dry_run_tag') : '');
+        var pc = loadProgressCache();
+        if (pc.run !== s.run_id) pc = {run: s.run_id, src: {}};
+        pc.src = pc.src || {};
+        var srcs = s.sources || s.disks || {};
         var bars = '';
-        Object.keys(s.sources || s.disks || {}).forEach(function (d) {
-          var info = (s.sources || s.disks || {})[d] || {};
+        Object.keys(srcs).forEach(function (d) {
+          var info = srcs[d] || {};
           var pct = parseFloat(info.pct) || 0;
-          bars += '<div class="ab-bar"><div style="width:' + Math.min(100, pct) + '%"></div>' +
-                  '<span>' + d + ' &nbsp; ' + (info.pct || '') + ' &nbsp; ' + (info.rate || '') +
-                  ' &nbsp; ETA ' + (info.eta || '-') + '</span></div>';
+          if (pct > 0 || info.rate || info.eta) {
+            // keep the newest non-empty values; a poll that momentarily
+            // parses nothing must never blank the bar
+            pc.src[d] = {pct: pct || (pc.src[d] && pc.src[d].pct) || 0,
+                         rate: info.rate || (pc.src[d] && pc.src[d].rate) || '',
+                         eta: info.eta || (pc.src[d] && pc.src[d].eta) || ''};
+          }
+          var last = pc.src[d] || {pct: pct, rate: '', eta: ''};
+          var label;
+          if (info.done) {
+            label = esc(d) + ' &nbsp; \u2713 ' + esc(T('src_done'));
+            pct = 100;
+          } else if (info.exit !== undefined && info.exit !== 0 && info.exit !== 24) {
+            label = esc(d) + ' &nbsp; \u2717 ' + esc(T('src_failed')) + ' (exit ' + info.exit + ')';
+          } else if (pct >= 100) {
+            label = esc(d) + ' &nbsp; \u2713 ' + esc(T('src_done'));
+          } else {
+            label = esc(d) + ' &nbsp; ' + (last.pct || '') + (last.pct ? '%' : '') +
+                    ' &nbsp; ' + esc(last.rate || '') + ' &nbsp; ETA ' + esc(last.eta || '-');
+          }
+          bars += '<div class="ab-bar"><div style="width:' + Math.min(100, pct) + '%"></div><span>' + label + '</span></div>';
         });
+        if (!bars) bars = '<div class="ab-muted">' + esc(T('loading')) + '</div>';
         $('ab-live-bars').innerHTML = bars;
+        saveProgressCache(pc);
       } else {
         live.style.display = 'none';
         $('ab-global').textContent = s.state ? T('last_run') + ' ' + (s.run_id || '') + ': ' + s.state : '';
+        if (lastRunning) clearProgressCache();
         // Fehlergrund aus status.json (engine.sh schreibt dorthin die Ursache)
         if (s.error && (s.state === 'failed' || s.state === 'partial')) {
           banner(T('error_prefix') + ' ' + (s.run_id || '') + ' (' + s.state + '): ' + s.error +

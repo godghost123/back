@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.05.008}"
+VERSION="${VERSION:-2026.11.06.001}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -60,6 +60,18 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: live progress display "disappears" mid-run. Causes fixed: (a) before
+  the first file of a batch rsync re-prints "0% 0.00kB/s 0:00:00" placeholder
+  lines (also after every retry) - those overwrote a bar that had real
+  values; the parser now ignores 0%-placeholder lines and keeps the last
+  good values (engine-side cache). (b) a retry truncated the progress log
+  (> instead of >>), wiping the history; the delta extraction now reads the
+  last --stats block. (c) finished sources kept showing a stale percentage
+  and ETA forever (looked broken); they are now reported as done (green
+  100% bar, "fertig"). (d) the WebUI re-renders bars each poll - values are
+  now kept in sessionStorage per run id, so switching tabs/reloading the
+  page no longer blanks the progress, and a poll that parses nothing keeps
+  the last known values.
 - Fix: install aborted with "plugin: run failed: /bin/bash returned 1" - the
   icon block (a ~20 KB base64 here-document inside a Run INLINE) is mangled on
   the server ("here-document delimited by end-of-file", "base64: invalid
