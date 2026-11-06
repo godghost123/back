@@ -49,11 +49,18 @@ function write_cron($c) {
     // Zeile 1 (optional): Backup-Zeitplan. Zeile 2 (IMMER): heal.sh - die
     // Selbstheilung der PLG-Registration (identisch zu install.sh; beide
     // schreiben dieselbe Datei, sonst verschwindet der Heal beim Config-Speichern).
+    //
+    // OHNE user-Feld: die .cron-Dateien landen in /etc/cron.d/root, und Unraid
+    // liest diese Eintraege ohne user-Feld (genau so erzeugt update_cron auch
+    // alle anderen Zeilen). Ein "root" an Stelle 6 waere dort nicht der
+    // Benutzer, sondern der BEFEHL -> "/bin/sh: line 1: root: command not
+    // found", der eigentliche Job laeuft nie. Also: Zeitfelder, dann direkt
+    // der Befehl (der Cron-Prozess laeuft auf Unraid ohnehin als root).
     $body = '';
     if (!empty($c['schedule_enabled']) && preg_match('/^[\d*\/, -]+ [\d*\/, -]+ [\d*\/, -]+ [\d*\/, -]+ [\d*\/, -]+$/', trim($c['schedule_cron']))) {
-        $body = trim($c['schedule_cron'])." root nice -n 10 /usr/local/emhttp/plugins/arraybackup/include/engine.sh >> /boot/config/plugins/arraybackup/logs/cron.log 2>&1\n";
+        $body = trim($c['schedule_cron'])." nice -n 10 /usr/local/emhttp/plugins/arraybackup/include/engine.sh >> /boot/config/plugins/arraybackup/logs/cron.log 2>&1\n";
     }
-    $body .= "*/30 * * * * root /boot/config/plugins/arraybackup/heal.sh >/dev/null 2>&1\n";
+    $body .= "*/30 * * * * /boot/config/plugins/arraybackup/heal.sh >/dev/null 2>&1\n";
     file_put_contents($CRON_FILE, $body);
     // Crontab aus allen Flash-.cron-Dateien neu bauen (dynamix-Mechanismus,
     // ueberlebt Reboots; /etc/cron.d selbst ist fluechtiges tmpfs)

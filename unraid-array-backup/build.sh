@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.06.003}"
+VERSION="${VERSION:-2026.11.06.004}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -60,6 +60,15 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: the scheduled backup never ran - cron.log showed only "root: command
+  not found". Unraid builds /etc/cron.d/root from the plugins' .cron files and
+  reads those entries as a PLAIN crontab (update_cron's own lines have no user
+  field), so the "root" we placed between the time fields and the command was
+  parsed as the COMMAND, not the user: every tick died before engine.sh/heal.sh
+  ever started (the heal cron had been silently dead since it was introduced -
+  its output went to /dev/null). Both cron writers (install.sh and the WebUI
+  config-save) now emit time fields + command only; the cron process on Unraid
+  runs as root anyway.
 - Fix: finished backups stuck in .ab-staging ("appears not in the list"). The
   wall of "WARN: could not write JSON: ... (disk full?)" meant the php CLI
   subprocess failed for EVERY json write (status.json every 2 s AND

@@ -57,6 +57,14 @@ chmod 0755 /boot/config/plugins/arraybackup/heal.sh
 # (dynamix) kettet sie beim Boot/Plugin-Install automatisch in die Crontab ein.
 # Zeile 1 = Backup-Zeitplan (nur wenn aktiviert), Zeile 2 = heal.sh immer.
 #
+# ACHTUNG Format: die .cron-Dateien landen in /etc/cron.d/root, und Unraid
+# liest diese Eintraege OHNE user-Feld (siehe die Zeilen, die update_cron
+# selbst erzeugt). Ein user-Feld wie "root" an Stelle 6 wird deshalb nicht
+# als Benutzer, sondern als BEFEHL interpretiert -> der Cron-Tick meldet
+# nur "/bin/sh: line 1: root: command not found" und der eigentliche Job
+# laeuft nie. Darum hier und in ajax.php: NUR die Zeitfelder, dann direkt
+# der Befehl.
+#
 # Pfad per Umgebungsvariable, NICHT ueber $argv: $argv existiert nur bei
 # register_argc_argv=On (php.ini). Steht das auf Off, ist $argv[1] undefiniert,
 # json_decode liefert "" - und der Zeitplan wuerde hier MIT "|| true" kommentarlos
@@ -68,9 +76,9 @@ AB_CONF="$CONF" AB_CRON="$CRON_FILE" php -r '
   $cron = getenv("AB_CRON");
   $body = "";
   if (!empty($c["schedule_enabled"]) && !empty($c["schedule_cron"])) {
-    $body = trim($c["schedule_cron"])." root nice -n 10 /usr/local/emhttp/plugins/arraybackup/include/engine.sh >> /boot/config/plugins/arraybackup/logs/cron.log 2>&1\n";
+    $body = trim($c["schedule_cron"])." nice -n 10 /usr/local/emhttp/plugins/arraybackup/include/engine.sh >> /boot/config/plugins/arraybackup/logs/cron.log 2>&1\n";
   }
-  $body .= "*/30 * * * * root /boot/config/plugins/arraybackup/heal.sh >/dev/null 2>&1\n";
+  $body .= "*/30 * * * * /boot/config/plugins/arraybackup/heal.sh >/dev/null 2>&1\n";
   if (file_put_contents($cron, $body) === false) exit 1;
 ' 2>/dev/null
 if [ ! -s "$CRON_FILE" ]; then
@@ -79,9 +87,9 @@ if [ ! -s "$CRON_FILE" ]; then
   when=$(grep -o '"schedule_cron"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONF" 2>/dev/null | head -n1 | cut -d'"' -f4)
   {
     if [ -n "$enabled" ] && [ -n "$when" ]; then
-      printf '%s root nice -n 10 /usr/local/emhttp/plugins/arraybackup/include/engine.sh >> /boot/config/plugins/arraybackup/logs/cron.log 2>&1\n' "$when"
+      printf '%s nice -n 10 /usr/local/emhttp/plugins/arraybackup/include/engine.sh >> /boot/config/plugins/arraybackup/logs/cron.log 2>&1\n' "$when"
     fi
-    printf '*/30 * * * * root /boot/config/plugins/arraybackup/heal.sh >/dev/null 2>&1\n'
+    printf '*/30 * * * * /boot/config/plugins/arraybackup/heal.sh >/dev/null 2>&1\n'
   } > "$CRON_FILE"
   logger -p user.warning -t arraybackup "config.json could not be parsed by php - cron written from raw grep (check php on this server)"
 fi
