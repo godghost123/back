@@ -83,8 +83,12 @@ die() {
 # path -> the bundled excludes.txt was silently ignored until first save.
 load_config() {
   [ -f "$CONF_FILE" ] || die "config file missing: $CONF_FILE"
-  eval "$(php -r '
-    $c = json_decode(file_get_contents($argv[1]), true) ?: [];
+  # Path travels via env, NOT $argv: $argv only exists when register_argc_argv
+  # is On (php.ini). With it Off, $argv[1] is undefined -> json_decode("") ->
+  # every php -r in this script fails, and this eval would silently leave ALL
+  # CFG_* at their built-in defaults (config quietly ignored, incl. target).
+  eval "$(AB_CONF="$CONF_FILE" php -r '
+    $c = json_decode(file_get_contents(getenv("AB_CONF")), true) ?: [];
     $d = array("target"=>"/mnt/backup","retention_runs"=>14,"retention_min_free_gb"=>500,
                "max_jobs"=>0,"bwlimit_kbps"=>0,"dry_run"=>false,"resume_aborted"=>true,
                "exclude_file"=>"/boot/config/plugins/arraybackup/excludes.txt",
@@ -107,30 +111,121 @@ load_config() {
 # ---- JSON helpers -----------------------------------------------------------
 # json_escape <string> -> valid JSON string literal (substitutes invalid UTF-8,
 # which rsync messages can contain; json_encode would otherwise return false).
+# Bash fallback when the php subprocess is broken (see write_json): backslash,
+# quote and control chars are escaped; anything non-printable is dropped rather
+# than emitted raw. UTF-8 passes through untouched (JSON allows it).
 json_escape() {
-  php -r '$s = $argv[count($argv)-1]; $j = json_encode((string)$s, 2097152|256); if ($j === false) exit(1); printf("%s", $j);' "$1" 2>/dev/null
+  local s="$1" out="" c i
+  if command -v php >/dev/null 2>&1; then
+    # stdin instead of $argv - see load_config for the register_argc_argv trap
+    out=$(printf '%s' "$s" | php -r '$s = stream_get_contents(STDIN); $j = json_encode((string)$s, 2097152|256); if ($j === false) exit(1); printf("%s", $j);' 2>/dev/null)
+    [ -n "$out" ] && { printf '%s' "$out"; return 0; }
+  fi
+  for (( i=0; i<${#s}; i++ )); do
+    c=${s:i:1}
+    case "$c" in
+      \\) out+='\\' ;;
+      '"') out+='\"' ;;
+      $'\n') out+='\n' ;;
+      $'\r') out+='\r' ;;
+      $'\t') out+='\t' ;;
+      *) [[ $c == [[:cntrl:]] ]] || out+="$c" ;;
+    esac
+  done
+  printf '"%s"' "$out"
 }
 
 # write_json <file> <body>  - body is a JSON object body ("k":v,... pairs,
 # no braces). It is json_decode-d FIRST, so a malformed body can never land in
 # status.json / .runmeta.json (it fails here instead), then re-encoded with
 # json_encode and moved into place atomically (tmp + rename).
+#
+# TWO paths, deliberately:
+#  1. php (validate + canonical re-encode) - the strict path.
+#  2. pure bash fallback - if the php SUBPROCESS is unusable (CLI php memory
+#     limit, broken php.ini, tmpfs full at the moment php starts), path 1 fails
+#     for EVERY json write at once: status.json AND .runmeta.json. The operator
+#     then sees a wall of "could not write JSON (disk full?)" and a finished
+#     snapshot stuck in .ab-staging, because promotion refuses to move a run
+#     without meta. The fallback validates the body in bash (no control chars,
+#     balanced unescaped quotes) and writes it verbatim, so a broken php can no
+#     longer hold a completed backup hostage.
+#
+# Both paths report the REAL reason: php's stderr and the shell redirect error
+# are captured and logged, otherwise every operator (and every support thread)
+# ends up guessing "disk full?" while the cause was read-only, missing parent
+# dir, invalid body or a PHP fatal.
 write_json() {
-  # Compact output (JSON_UNESCAPED_SLASHES only, NO JSON_PRETTY_PRINT): these
-  # files are machine-read, and engine.sh greps .runmeta.json for
-  # '"state":"..."' - pretty printing inserted a space after ':' and silently
-  # broke those greps (resume detection, mark_stale_runs).
-  # Failures are logged loudly: a run must never be promoted without meta
-  # just because a write hiccupped (disk full, permissions, php OOM).
-  php -r '
-    $f    = $argv[1];
-    $body = implode(" ", array_slice($argv, 2));
+  local f="$1"; shift
+  local body="$*"
+  local rc=0 err="" t="${f}.tmp" dir n
+  # Body via stdin, path via env: $argv needs register_argc_argv=On in php.ini.
+  # If that is Off, EVERY php -r here fails at once (status.json every 2 s AND
+  # .runmeta.json), and the finished snapshot would stay stuck in .ab-staging
+  # even though the backup itself succeeded - the exact failure the operator
+  # must not be punished for.
+  err=$(printf '%s' "$body" | AB_FILE="$f" php -r '
+    $f    = getenv("AB_FILE");
+    $body = stream_get_contents(STDIN);
     $doc  = json_decode("{" . $body . "}", true);
     if (!is_array($doc)) { fwrite(STDERR, "arraybackup: write_json got invalid object body\n"); exit 1; }
     $t = $f . ".tmp";
-    if (file_put_contents($t, json_encode($doc, 64) . "\n") === false) exit 1;
-    exit(rename($t, $f) ? 0 : 1);
-  ' "$@" 2>/dev/null || { log "WARN: could not write JSON: $1"; return 1; }
+    if (file_put_contents($t, json_encode($doc, 64) . "\n") === false) {
+      fwrite(STDERR, "arraybackup: write_json could not write " . $t . "\n"); exit 1;
+    }
+    if (!rename($t, $f)) {
+      fwrite(STDERR, "arraybackup: write_json could not rename " . $t . " -> " . $f . "\n"); exit 1;
+    }
+    exit 0;
+  ' 2>&1) || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  err=$(printf '%s' "$err" | tr '\n\r' '  ' | tr -s ' ')
+  log "WARN: php write_json failed for $f (rc=$rc)${err:+ - $err} - trying bash fallback"
+
+  # ---- bash fallback ------------------------------------------------------
+  # Refuse bodies that cannot be valid JSON: raw newlines/tabs (a JSON string
+  # literal must not contain them) and an odd count of unescaped quotes.
+  case "$body" in
+    (*[[:cntrl:]]*)
+      log "ERROR: bash fallback refused $f: body contains control characters"
+      syslog_err "arraybackup: write_json bash fallback refused $f (control chars in body)"
+      return 1 ;;
+  esac
+  # strip every backslash+next-char pair (escape sequences) so an escaped
+  # quote \" does not skew the count. Pattern is \\? : an escaped backslash
+  # followed by exactly one char.
+  n=$(printf '%s' "${body//\\?/}" | tr -d -c '"' | wc -c)
+  [ "$((n % 2))" -eq 0 ] || {
+    log "ERROR: bash fallback refused $f: unbalanced quotes in body"
+    syslog_err "arraybackup: write_json bash fallback refused $f (unbalanced quotes)"
+    return 1
+  }
+  dir=${f%/*}
+  [ "$dir" = "$f" ] && dir="."
+  mkdir -p -- "$dir" 2>/dev/null
+  err=$( { printf '{%s}\n' "$body" >"$t"; } 2>&1 )
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    err=$(printf '%s' "$err" | tr '\n\r' '  ' | tr -s ' ')
+    log "ERROR: could not write JSON: $f (rc=$rc)${err:+ - $err}"
+    syslog_err "arraybackup: could not write JSON $f (rc=$rc)${err:+ - $err}"
+    rm -f -- "$t" 2>/dev/null
+    return 1
+  fi
+  err=$( { mv -f -- "$t" "$f"; } 2>&1 )
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    err=$(printf '%s' "$err" | tr '\n\r' '  ' | tr -s ' ')
+    log "ERROR: could not write JSON: $f (rename failed, rc=$rc)${err:+ - $err}"
+    syslog_err "arraybackup: could not rename JSON temp into $f (rc=$rc)${err:+ - $err}"
+    rm -f -- "$t" 2>/dev/null
+    return 1
+  fi
+  log "WARN: $f written by the bash fallback (php subprocess unusable - check php on this server)"
+  syslog_err "arraybackup: $f written without php (php subprocess failed) - php CLI on this server looks broken"
+  return 0
 }
 
 # The document is assembled through write_json (json_encode), never printf:
@@ -202,10 +297,18 @@ write_status() {
     errj=$(json_escape "$(printf '%s' "$errmsg" | tr '\n\r' '  ')")
     [ -n "$errj" ] && errjson="\"error\":${errj},"   # drop (not corrupt) if escape failed
   fi
-  # orphan warning surfaced in the WebUI banner (Kap. 4.8: warning only)
-  local orjson=""
+  # orphan warning surfaced in the WebUI banner (Kap. 4.8: warning only).
+  # Built WITHOUT php: a failed json_escape used to yield "\"orphan\":" with no
+  # value -> invalid JSON, and json_decode inside write_json then rejected the
+  # WHOLE status document, i.e. one orphan name could blank out every progress
+  # write of the run. Mount/share names are normalized through sanitize_token,
+  # which is quote-free by construction.
+  local orjson="" orsafe="" o
   if [ ${#ORPHANS[@]} -gt 0 ]; then
-    orjson="\"orphan\":$(json_escape "$(printf '%s ' "${ORPHANS[@]}")" 2>/dev/null | tr '\n' ' '),"
+    for o in "${ORPHANS[@]}"; do
+      orsafe="${orsafe}${orsafe:+ }$(sanitize_token "$o")"
+    done
+    orjson="\"orphan\":\"${orsafe}\","
   fi
   write_json "$STATUS_FILE" "\"state\":\"${state}\",\"run_id\":\"${run_id}\",\"updated\":\"${now}\",\"phase\":\"${RUN_PHASE}\",\"elapsed\":$(( $(date +%s) - START_EPOCH )),${errjson}${orjson}\"dry_run\":$([ "$CFG_DRYRUN" -gt 0 ] && echo true || echo false),\"sources\":{${diskjson}}"
 }
@@ -791,10 +894,16 @@ run_backup() {
     fi
   fi
   # orphans stay visible in the meta (warning only, no jobs - Kap. 4.8)
-  local ometa="[]"
+  # NOTE: the previous inline PHP called strim(x) and assigned to "x" (no $) -
+  # a PHP fatal (undefined function) every run, so this always fell back to []
+  # and orphan_dirs was never filled. Built without php instead: sanitize_token
+  # makes the names JSON-safe, no dependency on a php subprocess.
+  local ometa="[]" oname olist=""
   if [ ${#ORPHANS[@]} -gt 0 ]; then
-    ometa=$(printf '%s\n' "${ORPHANS[@]}" | php -r '$l=array(); while(($x=fgets(STDIN))!==null){x=strim(x); if(x!="")l[]=x;} echo json_encode(l,64);')
-    [ -z "$ometa" ] && ometa="[]"
+    for oname in "${ORPHANS[@]}"; do
+      olist="${olist}${olist:+,}\"$(sanitize_token "$oname")\""
+    done
+    [ -n "$olist" ] && ometa="[$olist]"
   fi
   SWEEP_JSON="${SWEEP_DELETED:-0}"
 

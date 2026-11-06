@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.06.002}"
+VERSION="${VERSION:-2026.11.06.003}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -60,6 +60,27 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: finished backups stuck in .ab-staging ("appears not in the list"). The
+  wall of "WARN: could not write JSON: ... (disk full?)" meant the php CLI
+  subprocess failed for EVERY json write (status.json every 2 s AND
+  .runmeta.json) - most likely register_argc_argv=Off in php.ini, where the
+  scripts read arguments through \$argv (undefined -> every php -r fails while
+  the WebUI keeps working because it runs via FPM). Three layers of fix:
+  (1) all engine/install php snippets now read paths and bodies via env/stdin
+  instead of \$argv - independent of that php.ini switch; (2) write_json has a
+  pure-bash fallback (validates the body, writes tmp + rename) so status and
+  .runmeta.json work even with a completely broken php CLI, and the promote of
+  a finished run no longer fails; (3) real error text is now logged instead of
+  being swallowed by 2>/dev/null, and install.sh writes the cron file from a
+  grep fallback if php cannot parse the config. A run stuck in .ab-staging is
+  resumed and promoted automatically on the next start (no data lost).
+- Fix: orphan_dirs in .runmeta.json was always [] - the inline PHP used
+  strim(x) (undefined function -> fatal) and the result was silently discarded
+  before json_decode could reject it. Now built in bash from the sanitized
+  names. Same class of bug in write_status: a failed json_escape of the orphan
+  banner emitted "\"orphan\":," (invalid JSON) and ONE bad escape used to blank
+  every progress/status write of the run; orphan names are now quote-free
+  tokens by construction.
 - Fix: finished sources showed "X fehlgeschlagen (exit 0)". The WebUI now
   normalizes the exit value (number vs. string) and renders exit 0/24 as
   "done" (green 100 % bar). A source whose job has not started yet (queued
