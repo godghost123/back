@@ -250,6 +250,14 @@ environment, never `$argv`), so a big tree never blocks emhttp:
 
 ## Known limits / future ideas
 
-- v1 mirrors **disks**, not shares (a share union view is conceivable)
-- no checksum verification, no notifications
-- retention by count, not a GFS scheme
+- Sources are **mounts** (data disks + pools) merged into one `fs/` tree, so a
+  share union view exists – but a top-level folder that exists **only** on a
+  pool and never on the array (e.g. `Cache → Backup`) is **not** secured; it is
+  reported as a warning banner (`orphan_info`) instead of getting its own job.
+- No checksum verification (`rsync -c` "verify" run is only an idea), no
+  unRAID notifications – run results land in the WebUI and the flash logs only.
+- Retention by count + free-space guard, not a GFS scheme.
+- Restore is additive: no `--delete`, so a restore never removes files at the
+  target; restoring a whole run (all shares) at once is not implemented.
+- A deleted-file audit trail is missing: the orphan-sweep reports only the
+  **count** (`swept_deleted`), not the deleted paths.
