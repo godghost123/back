@@ -221,7 +221,10 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       saved:           'Gespeichert.',
       error_colon:     'Fehler:',
       src_done:        'fertig',
-      src_failed:      'fehlgeschlagen'
+      src_failed:      'fehlgeschlagen',
+      src_pending:     'wartet…',
+      phase_setup:     'Startphase: Quellen/Shares werden ermittelt – noch läuft kein rsync.',
+      phase_finalize:  'Transfers fertig – Snapshot wird finalisiert (Größen-Ermittlung + Bereinigung/Promotion).'
     },
     en: {
       btn_start:       'Start backup',
@@ -285,7 +288,10 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       saved:           'Saved.',
       error_colon:     'Error:',
       src_done:        'done',
-      src_failed:      'failed'
+      src_failed:      'failed',
+      src_pending:     'waiting…',
+      phase_setup:     'startup phase: discovering sources/shares - no rsync running yet.',
+      phase_finalize:  'transfers finished - finalizing snapshot (sizing + sweep/promotion).'
     }
   };
   function T(key) { return (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.de[key] || key; }
@@ -352,7 +358,16 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
       if (running) {
         live.style.display = 'block';
         $('ab-live-id').textContent = s.run_id || '';
-        $('ab-global').textContent = T('global_running') + (s.dry_run ? ' ' + T('dry_run_tag') : '');
+        // Engine phase (engine.sh RUN_PHASE): setup = before/starting the
+        // rsync jobs, transfer = copying, finalize = du + sweep + promotion
+        // (all transfers over, nothing is read anymore - without this the
+        // UI looks "stuck" although the run is healthy). Older engines
+        // without the phase key simply show the plain "running" text.
+        var phase = s.phase || 'transfer';
+        var phaseTxt = phase === 'setup' ? T('phase_setup')
+                     : phase === 'finalize' ? T('phase_finalize') : '';
+        $('ab-global').textContent = T('global_running') + (s.dry_run ? ' ' + T('dry_run_tag') : '') +
+          (s.elapsed ? ' (' + fmtDur(s.elapsed) + ')' : '');
         var pc = loadProgressCache();
         if (pc.run !== s.run_id) pc = {run: s.run_id, src: {}};
         pc.src = pc.src || {};
@@ -361,6 +376,14 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
         Object.keys(srcs).forEach(function (d) {
           var info = srcs[d] || {};
           var pct = parseFloat(info.pct) || 0;
+          // exit may arrive as number or string (older engines quoted it);
+          // normalize before comparing - a string "0" must never render as
+          // "fehlgeschlagen (exit 0)".
+          var ex = null;
+          if (info.exit !== undefined && info.exit !== null && info.exit !== '') {
+            ex = parseInt(info.exit, 10);
+            if (isNaN(ex)) ex = null;
+          }
           if (pct > 0 || info.rate || info.eta) {
             // keep the newest non-empty values; a poll that momentarily
             // parses nothing must never blank the bar
@@ -370,19 +393,24 @@ table.ab-table { width: 100%; border-collapse: collapse; font-size: 13px; }
           }
           var last = pc.src[d] || {pct: pct, rate: '', eta: ''};
           var label;
-          if (info.done) {
+          if (info.done || ex === 0 || ex === 24) {
             label = esc(d) + ' &nbsp; \u2713 ' + esc(T('src_done'));
             pct = 100;
-          } else if (info.exit !== undefined && info.exit !== 0 && info.exit !== 24) {
-            label = esc(d) + ' &nbsp; \u2717 ' + esc(T('src_failed')) + ' (exit ' + info.exit + ')';
+          } else if (ex !== null) {
+            label = esc(d) + ' &nbsp; \u2717 ' + esc(T('src_failed')) + ' (exit ' + ex + ')';
           } else if (pct >= 100) {
             label = esc(d) + ' &nbsp; \u2713 ' + esc(T('src_done'));
+          } else if (!last.pct && !last.rate && !last.eta) {
+            // job queued (max_jobs) or still scanning: say so instead of
+            // rendering an empty bar that reads as "broken"
+            label = esc(d) + ' &nbsp; ' + esc(T('src_pending'));
           } else {
             label = esc(d) + ' &nbsp; ' + (last.pct || '') + (last.pct ? '%' : '') +
                     ' &nbsp; ' + esc(last.rate || '') + ' &nbsp; ETA ' + esc(last.eta || '-');
           }
           bars += '<div class="ab-bar"><div style="width:' + Math.min(100, pct) + '%"></div><span>' + label + '</span></div>';
         });
+        if (phaseTxt) bars += '<div class="ab-muted" style="margin-top:6px">' + esc(phaseTxt) + '</div>';
         if (!bars) bars = '<div class="ab-muted">' + esc(T('loading')) + '</div>';
         $('ab-live-bars').innerHTML = bars;
         saveProgressCache(pc);

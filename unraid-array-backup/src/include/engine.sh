@@ -37,6 +37,13 @@ ORPHANS=()
 EXC_ARGS=()
 PIDS=()
 RUN_ID=""
+# Lifecycle phase reported to the WebUI: setup|transfer|finalize. During
+# finalize (du + orphan-sweep + promotion) the rsync jobs are ALL done and
+# no disk is read anymore - without the phase the WebUI keeps showing the
+# last per-source progress lines and users read it as "progress lost" or
+# wonder why nothing is read although the run is still "laufend".
+RUN_PHASE="setup"
+START_EPOCH=$(date +%s)
 CFG_TARGET="/mnt/backup"
 CFG_RETENTION=14
 CFG_MINFREE=500
@@ -200,7 +207,7 @@ write_status() {
   if [ ${#ORPHANS[@]} -gt 0 ]; then
     orjson="\"orphan\":$(json_escape "$(printf '%s ' "${ORPHANS[@]}")" 2>/dev/null | tr '\n' ' '),"
   fi
-  write_json "$STATUS_FILE" "\"state\":\"${state}\",\"run_id\":\"${run_id}\",\"updated\":\"${now}\",${errjson}${orjson}\"dry_run\":$([ "$CFG_DRYRUN" -gt 0 ] && echo true || echo false),\"sources\":{${diskjson}}"
+  write_json "$STATUS_FILE" "\"state\":\"${state}\",\"run_id\":\"${run_id}\",\"updated\":\"${now}\",\"phase\":\"${RUN_PHASE}\",\"elapsed\":$(( $(date +%s) - START_EPOCH )),${errjson}${orjson}\"dry_run\":$([ "$CFG_DRYRUN" -gt 0 ] && echo true || echo false),\"sources\":{${diskjson}}"
 }
 
 running_count() {
@@ -717,6 +724,7 @@ run_backup() {
     done
   done
 
+  RUN_PHASE="transfer"
   while :; do
     [ -f "$STOP_FILE" ] && stop_all
     write_status "running" "$RUN_ID"
@@ -724,6 +732,11 @@ run_backup() {
     sleep 2
   done
   wait
+  # transfers over -> du/sweep/promotion: sources report their exits and no
+  # rate/eta makes sense anymore; announce the phase so the WebUI can say
+  # what the engine is doing instead of looking "stuck".
+  RUN_PHASE="finalize"
+  write_status "running" "$RUN_ID"
 
   state="success"
   local fail_detail=""

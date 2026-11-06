@@ -4,7 +4,7 @@
 set -eu
 cd "$(dirname "$0")"
 
-VERSION="${VERSION:-2026.11.06.001}"
+VERSION="${VERSION:-2026.11.06.002}"
 OUT="arraybackup.plg"
 
 # GitHub-Adresse fuer Update-Pruefung: pluginURL muss auf die ROHE PLG-Datei
@@ -60,6 +60,14 @@ cat <<EOF
 <CHANGES>
 ##arraybackup
 ###${VERSION}
+- Fix: finished sources showed "X fehlgeschlagen (exit 0)". The WebUI now
+  normalizes the exit value (number vs. string) and renders exit 0/24 as
+  "done" (green 100 % bar). A source whose job has not started yet (queued
+  via max_jobs, still scanning) shows "waiting" instead of an empty bar.
+- Engine now reports the run phase (setup / transfer / finalize) and elapsed
+  time. During finalize (sizing + orphan-sweep + promotion) no source is read
+  anymore - the WebUI says so explicitly ("transfers finished - finalizing
+  snapshot") instead of looking stuck with frozen bars.
 - Fix: live progress display "disappears" mid-run. Causes fixed: (a) before
   the first file of a batch rsync re-prints "0% 0.00kB/s 0:00:00" placeholder
   lines (also after every retry) - those overwrote a bar that had real
